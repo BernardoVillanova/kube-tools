@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# kube-tools: Interactive installer & shell configurator for Kubernetes CLI tools
+# kube-tools: Centralized, verified installer & shell configurator for K8s tools
 # Tools: fzf, kubectx/kubens, helm, k9s, kubetail, kube-ps1
+# Repository: https://github.com/BernardoVillanova/kube-tools
+# License: MIT
 # ==============================================================================
 
 set -euo pipefail
 
+VERSION="1.2.0"
 INSTALL_BIN_DIR="${HOME}/.local/bin"
 INSTALL_SHARE_DIR="${HOME}/.local/share/kube-tools"
 MARKER_BEGIN="# >>> kube-tools initialize >>>"
@@ -14,6 +17,14 @@ MARKER_END="# <<< kube-tools initialize <<<"
 DRY_RUN=false
 UNINSTALL=false
 NON_INTERACTIVE=false
+DOCTOR_MODE=false
+
+# Auto-detect CLI language from locale (default: pt if LANG starts with pt, else en)
+if [[ "${LANG:-}" == pt* || "${LC_ALL:-}" == pt* ]]; then
+    CLI_LANG="pt"
+else
+    CLI_LANG="en"
+fi
 
 # Default Alias Configuration
 ALIAS_KUBECTX="kctx"
@@ -38,14 +49,29 @@ log_ok()    { printf "${GREEN}[OK]${NC} %s\n" "$*"; }
 log_warn()  { printf "${YELLOW}[WARN]${NC} %s\n" "$*"; }
 log_error() { printf "${RED}[ERROR]${NC} %s\n" "$*" >&2; }
 
+msg() {
+    local en="$1"
+    local pt="$2"
+    if [[ "$CLI_LANG" == "pt" ]]; then
+        printf "%s" "$pt"
+    else
+        printf "%s" "$en"
+    fi
+}
+
 usage() {
     cat <<EOF
+kube-tools v${VERSION} — Kubernetes CLI Toolchain Installer & Shell Configurator
+
 Usage: $(basename "$0") [OPTIONS]
 
 Options:
   -y, --yes          Non-interactive mode (install all missing tools & default aliases)
-  --dry-run          Run interactive wizard or audit without mutating the system
-  --uninstall        Remove kube-tools managed binaries, shared repos, and shell aliases (rollback)
+  --doctor, --check  Run environment, checksum, PATH, and tool health diagnostics
+  --dry-run          Simulate installation and shell changes without mutating the system
+  --uninstall        Remove kube-tools managed binaries, shared repos, and shell aliases
+  --lang <en|pt>     Set interface language (default: auto-detected from \$LANG)
+  -v, --version      Show version information
   -h, --help         Show this help message
 EOF
 }
@@ -53,23 +79,71 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -y|--yes|--non-interactive) NON_INTERACTIVE=true; shift ;;
+        --doctor|--check)           DOCTOR_MODE=true; shift ;;
         --dry-run)                  DRY_RUN=true; shift ;;
         --uninstall|--rollback)     UNINSTALL=true; shift ;;
+        --lang)
+            if [[ $# -lt 2 ]]; then log_error "Missing argument for --lang"; exit 1; fi
+            CLI_LANG="$2"; shift 2 ;;
+        -v|--version)               printf "kube-tools v%s\n" "$VERSION"; exit 0 ;;
         -h|--help)                  usage; exit 0 ;;
-        *) log_error "Opção desconhecida: $1"; usage; exit 1 ;;
+        *) log_error "$(msg "Unknown option" "Opção desconhecida"): $1"; usage; exit 1 ;;
     esac
 done
 
 run_cmd() {
     if [[ "$DRY_RUN" == "true" ]]; then
-        log_info "[DRY-RUN] Executaria: $*"
+        log_info "[DRY-RUN] $(msg "Would execute" "Executaria"): $*"
     else
         "$@"
     fi
 }
 
 # ------------------------------------------------------------------------------
-# 1. Environment & Installed Tools Detection
+# 1. Security & Integrity Verification Helpers (SHA-256 + Network Pre-flight)
+# ------------------------------------------------------------------------------
+compute_sha256() {
+    local file="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$file" | awk '{print $NF}'
+    else
+        log_error "$(msg "No SHA-256 tool found (sha256sum, shasum, openssl)" "Nenhuma ferramenta SHA-256 encontrada")"
+        return 1
+    fi
+}
+
+verify_sha256() {
+    local file="$1"
+    local expected_hash="$2"
+    local actual_hash
+    actual_hash="$(compute_sha256 "$file")"
+
+    if [[ "$actual_hash" != "$expected_hash" ]]; then
+        log_error "$(msg "SHA-256 checksum mismatch for" "Falha na verificação SHA-256 de") $(basename "$file")!"
+        log_error "  Expected: ${expected_hash}"
+        log_error "  Actual:   ${actual_hash}"
+        return 1
+    fi
+    log_ok "$(msg "SHA-256 checksum verified" "Checksum SHA-256 verificado"): ${actual_hash:0:16}..."
+}
+
+check_network_connectivity() {
+    if ! command -v curl >/dev/null 2>&1; then
+        return 0
+    fi
+    if curl -fsSL --connect-timeout 5 https://api.github.com/rate_limit >/dev/null 2>&1; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# 2. Environment & Installed Tools Detection
 # ------------------------------------------------------------------------------
 detect_environment() {
     OS_KERNEL="$(uname -s)"
@@ -78,13 +152,13 @@ detect_environment() {
     case "$OS_KERNEL" in
         Linux*)  OS="linux" ;;
         Darwin*) OS="darwin" ;;
-        *)       log_error "SO não suportado: $OS_KERNEL"; exit 1 ;;
+        *)       log_error "$(msg "Unsupported OS" "SO não suportado"): $OS_KERNEL"; exit 1 ;;
     esac
 
     case "$ARCH_RAW" in
         x86_64|amd64)   ARCH="amd64"; ARCH_K9S="amd64" ;;
         aarch64|arm64)  ARCH="arm64"; ARCH_K9S="arm64" ;;
-        *)              log_error "Arquitetura não suportada: $ARCH_RAW"; exit 1 ;;
+        *)              log_error "$(msg "Unsupported architecture" "Arquitetura não suportada"): $ARCH_RAW"; exit 1 ;;
     esac
 
     DISTRO="unknown"
@@ -114,12 +188,37 @@ detect_environment() {
     fi
 
     USER_SHELL="$(basename "${SHELL:-bash}")"
+    PATH_HAS_LOCAL_BIN=false
+    if [[ ":${PATH}:" == *":${INSTALL_BIN_DIR}:"* ]]; then
+        PATH_HAS_LOCAL_BIN=true
+    fi
     export PATH="${INSTALL_BIN_DIR}:${PATH}"
+}
+
+get_tool_version() {
+    local tool="$1"
+    case "$tool" in
+        fzf)      fzf --version 2>/dev/null | head -n1 | awk '{print $1}' || echo "installed" ;;
+        kubectx)  kubectx --version 2>/dev/null | head -n1 || echo "installed" ;;
+        helm)     helm version --short 2>/dev/null | head -n1 || echo "installed" ;;
+        k9s)      k9s version -s 2>/dev/null | awk '/Version/ {print $2}' | head -n1 || echo "installed" ;;
+        kubetail) kubetail --version 2>/dev/null | head -n1 | awk '{print $NF}' || echo "installed" ;;
+        kubectl)  kubectl version --client -o yaml 2>/dev/null | awk '/gitVersion:/ {print $2}' | head -n1 || echo "installed" ;;
+        *)        echo "installed" ;;
+    esac
 }
 
 # Tool catalog
 TOOL_KEYS=("fzf" "kubectx" "helm" "k9s" "kubetail" "kube-ps1")
-TOOL_NAMES=(
+TOOL_DESC_EN=(
+    "fzf              (Interactive fuzzy finder for contexts & namespaces)"
+    "kubectx & kubens (Fast switching between K8s contexts & namespaces)"
+    "helm             (The Kubernetes Package Manager)"
+    "k9s              (Terminal UI to interact with Kubernetes clusters)"
+    "kubetail         (Tail logs from multiple Kubernetes pods at the same time)"
+    "kube-ps1         (Kubernetes context and namespace status on shell prompt)"
+)
+TOOL_DESC_PT=(
     "fzf              (Busca interativa fuzzy p/ contextos e namespaces)"
     "kubectx & kubens (Alternância rápida de contexto e namespace)"
     "helm             (Gerenciador de pacotes do Kubernetes)"
@@ -129,6 +228,7 @@ TOOL_NAMES=(
 )
 TOOL_INSTALLED=(0 0 0 0 0 0)
 TOOL_LOCATION=("" "" "" "" "" "")
+TOOL_VERSION=("" "" "" "" "" "")
 TOOL_SELECTED=(0 0 0 0 0 0)
 
 check_installed_tools() {
@@ -136,39 +236,46 @@ check_installed_tools() {
     if command -v fzf >/dev/null 2>&1; then
         TOOL_INSTALLED[0]=1
         TOOL_LOCATION[0]="$(command -v fzf)"
+        TOOL_VERSION[0]="$(get_tool_version fzf)"
     fi
 
     # 1: kubectx & kubens
     if command -v kubectx >/dev/null 2>&1 && command -v kubens >/dev/null 2>&1; then
         TOOL_INSTALLED[1]=1
         TOOL_LOCATION[1]="$(command -v kubectx)"
+        TOOL_VERSION[1]="$(get_tool_version kubectx)"
     fi
 
     # 2: helm
     if command -v helm >/dev/null 2>&1; then
         TOOL_INSTALLED[2]=1
         TOOL_LOCATION[2]="$(command -v helm)"
+        TOOL_VERSION[2]="$(get_tool_version helm)"
     fi
 
     # 3: k9s
     if command -v k9s >/dev/null 2>&1; then
         TOOL_INSTALLED[3]=1
         TOOL_LOCATION[3]="$(command -v k9s)"
+        TOOL_VERSION[3]="$(get_tool_version k9s)"
     fi
 
     # 4: kubetail
     if command -v kubetail >/dev/null 2>&1; then
         TOOL_INSTALLED[4]=1
         TOOL_LOCATION[4]="$(command -v kubetail)"
+        TOOL_VERSION[4]="$(get_tool_version kubetail)"
     fi
 
     # 5: kube-ps1
     if [[ -f "${INSTALL_SHARE_DIR}/kube-ps1/kube-ps1.sh" ]]; then
         TOOL_INSTALLED[5]=1
         TOOL_LOCATION[5]="${INSTALL_SHARE_DIR}/kube-ps1/kube-ps1.sh"
+        TOOL_VERSION[5]="script"
     elif [[ -f "/usr/share/kube-ps1/kube-ps1.sh" ]]; then
         TOOL_INSTALLED[5]=1
         TOOL_LOCATION[5]="/usr/share/kube-ps1/kube-ps1.sh"
+        TOOL_VERSION[5]="script"
     fi
 
     # Pre-select tools that are NOT installed yet
@@ -183,33 +290,91 @@ check_installed_tools() {
 
 print_diagnostic_report() {
     printf "\n${BOLD}${CYAN}======================================================================${NC}\n"
-    printf "${BOLD}${CYAN}  KUBE-TOOLS — Diagnóstico do Ambiente e Ferramentas${NC}\n"
+    printf "${BOLD}${CYAN}  KUBE-TOOLS v%s — %s${NC}\n" "$VERSION" \
+        "$(msg "Environment & Toolchain Audit" "Diagnóstico do Ambiente e Ferramentas")"
     printf "${BOLD}${CYAN}======================================================================${NC}\n"
-    printf "  ${BOLD}Sistema Operacional:${NC} %s (%s)\n" "$OS" "$DISTRO"
-    printf "  ${BOLD}Arquitetura:${NC}         %s (%s)\n" "$ARCH" "$ARCH_RAW"
-    printf "  ${BOLD}Gerenciador Pacotes:${NC} %s\n" "$PKG_MGR"
-    printf "  ${BOLD}Shell Principal:${NC}     %s\n" "$USER_SHELL"
+    printf "  ${BOLD}%-20s${NC} %s (%s)\n" "$(msg "Operating System:" "Sistema Operacional:")" "$OS" "$DISTRO"
+    printf "  ${BOLD}%-20s${NC} %s (%s)\n" "$(msg "Architecture:" "Arquitetura:")" "$ARCH" "$ARCH_RAW"
+    printf "  ${BOLD}%-20s${NC} %s\n"      "$(msg "Package Manager:" "Gerenciador Pacotes:")" "$PKG_MGR"
+    printf "  ${BOLD}%-20s${NC} %s\n"      "$(msg "Primary Shell:" "Shell Principal:")" "$USER_SHELL"
+
+    if command -v kubectl >/dev/null 2>&1; then
+        printf "  ${BOLD}%-20s${NC} ${GREEN}%s${NC} (%s)\n" "kubectl:" "$(get_tool_version kubectl)" "$(command -v kubectl)"
+    else
+        printf "  ${BOLD}%-20s${NC} ${YELLOW}%s${NC}\n" "kubectl:" "$(msg "Not found in PATH" "Não encontrado no PATH")"
+    fi
+
     printf "${CYAN}----------------------------------------------------------------------${NC}\n"
-    printf "  ${BOLD}Status atual das ferramentas no sistema:${NC}\n\n"
+    printf "  ${BOLD}%s:${NC}\n\n" "$(msg "Current Toolchain Status" "Status atual das ferramentas no sistema")"
 
     for i in "${!TOOL_KEYS[@]}"; do
         local key="${TOOL_KEYS[$i]}"
         if [[ "${TOOL_INSTALLED[$i]}" -eq 1 ]]; then
-            printf "   ${GREEN}✔${NC} %-16s ${GREEN}[Já instalado]${NC} ${DIM}(%s)${NC}\n" "$key" "${TOOL_LOCATION[$i]}"
+            printf "   ${GREEN}✔${NC} %-14s ${GREEN}%-16s${NC} %-12s ${DIM}(%s)${NC}\n" \
+                "$key" "$(msg "[Installed]" "[Já instalado]")" "${TOOL_VERSION[$i]}" "${TOOL_LOCATION[$i]}"
         else
-            printf "   ${YELLOW}✗${NC} %-16s ${YELLOW}[Não instalado]${NC}\n" "$key"
+            printf "   ${YELLOW}✗${NC} %-14s ${YELLOW}%-16s${NC}\n" \
+                "$key" "$(msg "[Not installed]" "[Não instalado]")"
         fi
     done
     printf "${CYAN}======================================================================${NC}\n\n"
 }
 
+run_doctor() {
+    print_diagnostic_report
+    log_info "$(msg "Running extended health & security checks..." "Executando verificações estendidas de saúde e segurança...")"
+
+    # 1. Base dependencies
+    for dep in git curl tar; do
+        if command -v "$dep" >/dev/null 2>&1; then
+            log_ok "$(msg "Base dependency present" "Dependência base presente"): $dep ($(command -v "$dep"))"
+        else
+            log_warn "$(msg "Missing base dependency" "Dependência base ausente"): $dep"
+        fi
+    done
+
+    # 2. Checksum utility
+    if command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || command -v openssl >/dev/null 2>&1; then
+        log_ok "$(msg "SHA-256 verification engine available" "Motor de verificação SHA-256 disponível")"
+    else
+        log_warn "$(msg "No SHA-256 utility found" "Utilitário SHA-256 não encontrado")"
+    fi
+
+    # 3. PATH check
+    if [[ "$PATH_HAS_LOCAL_BIN" == "true" ]]; then
+        log_ok "${INSTALL_BIN_DIR} $(msg "is in your PATH" "está presente no seu PATH")"
+    else
+        log_warn "${INSTALL_BIN_DIR} $(msg "is not in your current PATH yet (will be added to shell RC)" "ainda não está no PATH atual (será adicionado ao RC do shell)")"
+    fi
+
+    # 4. Network check
+    if check_network_connectivity; then
+        log_ok "$(msg "GitHub API & release endpoints reachable" "Conectividade com GitHub API e releases verificada")"
+    else
+        log_warn "$(msg "Could not reach GitHub API (check internet or rate limit)" "Não foi possível conectar à API do GitHub")"
+    fi
+
+    # 5. Shell RC markers
+    for rc in "${HOME}/.bashrc" "${HOME}/.zshrc" "${HOME}/.config/fish/config.fish"; do
+        if [[ -f "$rc" ]]; then
+            if grep -q "$MARKER_BEGIN" "$rc"; then
+                log_ok "$(msg "kube-tools block configured in" "Bloco kube-tools configurado em"): $rc"
+            else
+                log_info "$(msg "kube-tools block not yet added to" "Bloco kube-tools ainda não adicionado em"): $rc"
+            fi
+        fi
+    done
+}
+
 # ------------------------------------------------------------------------------
-# 2. Interactive Bash Form (Tools Selection + Aliases Customization)
+# 3. Interactive Bash Form (Tools Selection + Aliases Customization)
 # ------------------------------------------------------------------------------
 interactive_tool_selector() {
     while true; do
-        printf "${BOLD}1) Escolha quais ferramentas deseja instalar/atualizar:${NC}\n"
-        printf "   ${DIM}(As ferramentas ausentes já vêm pré-selecionadas com [x])${NC}\n\n"
+        printf "${BOLD}1) %s:${NC}\n" \
+            "$(msg "Select which tools to install/update" "Escolha quais ferramentas deseja instalar/atualizar")"
+        printf "   ${DIM}(%s)${NC}\n\n" \
+            "$(msg "Missing tools are pre-selected with [x]" "As ferramentas ausentes já vêm pré-selecionadas com [x]")"
 
         for i in "${!TOOL_KEYS[@]}"; do
             local num=$((i + 1))
@@ -218,21 +383,27 @@ interactive_tool_selector() {
 
             local status_tag=""
             if [[ "${TOOL_INSTALLED[$i]}" -eq 1 ]]; then
-                status_tag="${DIM}[instalado]${NC}"
+                status_tag="${DIM}$(msg "[installed]" "[instalado]")${NC}"
             else
-                status_tag="${YELLOW}[ausente]${NC}"
+                status_tag="${YELLOW}$(msg "[missing]" "[ausente]")${NC}"
             fi
 
-            printf "   [%b] %d) %s %b\n" "$mark" "$num" "${TOOL_NAMES[$i]}" "$status_tag"
+            local desc="${TOOL_DESC_EN[$i]}"
+            [[ "$CLI_LANG" == "pt" ]] && desc="${TOOL_DESC_PT[$i]}"
+
+            printf "   [%b] %d) %s %b\n" "$mark" "$num" "$desc" "$status_tag"
         done
 
         printf "\n"
-        printf "   ${BOLD}Comandos do formulário:${NC}\n"
-        printf "   • Digite os números (ex: ${CYAN}1 3 5${NC}) para marcar/desmarcar\n"
-        printf "   • Digite ${CYAN}a${NC} para marcar todas | ${CYAN}m${NC} apenas ausentes | ${CYAN}n${NC} nenhuma\n"
-        printf "   • Pressione ${GREEN}ENTER${NC} (em branco) para avançar\n\n"
+        printf "   ${BOLD}%s:${NC}\n" "$(msg "Form Controls" "Comandos do formulário")"
+        printf "   • %s (ex: ${CYAN}1 3 5${NC})\n" \
+            "$(msg "Type numbers to toggle individual tools" "Digite os números para marcar/desmarcar")"
+        printf "   • ${CYAN}a${NC} = $(msg "select all" "marcar todas") | ${CYAN}m${NC} = $(msg "missing only" "apenas ausentes") | ${CYAN}n${NC} = $(msg "none" "nenhuma")\n"
+        printf "   • %s ${GREEN}ENTER${NC} %s\n\n" \
+            "$(msg "Press" "Pressione")" "$(msg "(blank) to continue" "(em branco) para avançar")"
 
-        read -r -p "Sua opção [ENTER p/ confirmar]: " choice || break
+        local choice=""
+        read -r -p "$(msg "Your choice [ENTER to confirm]: " "Sua opção [ENTER p/ confirmar]: ")" choice || break
 
         if [[ -z "$choice" ]]; then
             break
@@ -249,7 +420,6 @@ interactive_tool_selector() {
                 fi
             done
         else
-            # Parse space/comma separated numbers
             local cleaned="${choice//,/ }"
             for token in $cleaned; do
                 if [[ "$token" =~ ^[1-6]$ ]]; then
@@ -260,7 +430,7 @@ interactive_tool_selector() {
                         TOOL_SELECTED[$idx]=1
                     fi
                 else
-                    log_warn "Opção inválida ignorada: $token"
+                    log_warn "$(msg "Invalid option ignored" "Opção inválida ignorada"): $token"
                 fi
             done
         fi
@@ -270,11 +440,12 @@ interactive_tool_selector() {
 
 interactive_alias_form() {
     printf "\n${CYAN}----------------------------------------------------------------------${NC}\n"
-    printf "${BOLD}2) Configuração de Aliases e Prompt (${USER_SHELL}):${NC}\n\n"
+    printf "${BOLD}2) %s (${USER_SHELL}):${NC}\n\n" \
+        "$(msg "Aliases & Prompt Configuration" "Configuração de Aliases e Prompt")"
 
     # kubectx alias
     local input_kctx=""
-    read -r -p "   Alias para 'kubectx' [padrão: ${ALIAS_KUBECTX} | '-' p/ desativar]: " input_kctx || true
+    read -r -p "   $(msg "Alias for 'kubectx' [default: ${ALIAS_KUBECTX} | '-' to disable]: " "Alias para 'kubectx' [padrão: ${ALIAS_KUBECTX} | '-' p/ desativar]: ")" input_kctx || true
     if [[ "$input_kctx" == "-" ]]; then
         ALIAS_KUBECTX=""
     elif [[ -n "$input_kctx" ]]; then
@@ -283,7 +454,7 @@ interactive_alias_form() {
 
     # kubens alias
     local input_kns=""
-    read -r -p "   Alias para 'kubens'  [padrão: ${ALIAS_KUBENS}  | '-' p/ desativar]: " input_kns || true
+    read -r -p "   $(msg "Alias for 'kubens'  [default: ${ALIAS_KUBENS}  | '-' to disable]: " "Alias para 'kubens'  [padrão: ${ALIAS_KUBENS}  | '-' p/ desativar]: ")" input_kns || true
     if [[ "$input_kns" == "-" ]]; then
         ALIAS_KUBENS=""
     elif [[ -n "$input_kns" ]]; then
@@ -292,36 +463,37 @@ interactive_alias_form() {
 
     # Optional alias for kubectl
     local input_k=""
-    read -r -p "   Deseja criar alias para 'kubectl'? (ex: k) [ENTER p/ pular]: " input_k || true
+    read -r -p "   $(msg "Create alias for 'kubectl'? (e.g. k) [ENTER to skip]: " "Deseja criar alias para 'kubectl'? (ex: k) [ENTER p/ pular]: ")" input_k || true
     if [[ -n "$input_k" && "$input_k" != "-" ]]; then
         ALIAS_KUBECTL="$input_k"
     fi
 
     # Optional alias for kubetail
     local input_kt=""
-    read -r -p "   Deseja criar alias para 'kubetail'? (ex: kt) [ENTER p/ pular]: " input_kt || true
+    read -r -p "   $(msg "Create alias for 'kubetail'? (e.g. kt) [ENTER to skip]: " "Deseja criar alias para 'kubetail'? (ex: kt) [ENTER p/ pular]: ")" input_kt || true
     if [[ -n "$input_kt" && "$input_kt" != "-" ]]; then
         ALIAS_KUBETAIL="$input_kt"
     fi
 
     # Custom user aliases loop
-    printf "\n   ${DIM}Deseja adicionar outros aliases personalizados? (formato: nome=comando)${NC}\n"
+    printf "\n   ${DIM}%s${NC}\n" \
+        "$(msg "Add custom aliases? (format: name=command)" "Deseja adicionar outros aliases personalizados? (formato: nome=comando)")"
     while true; do
         local custom_alias=""
-        read -r -p "   Novo alias [ENTER p/ concluir]: " custom_alias || break
+        read -r -p "   $(msg "New alias [ENTER to finish]: " "Novo alias [ENTER p/ concluir]: ")" custom_alias || break
         [[ -z "$custom_alias" ]] && break
         if [[ "$custom_alias" == *"="* ]]; then
             EXTRA_ALIASES+=("$custom_alias")
-            log_ok "Alias adicionado: $custom_alias"
+            log_ok "$(msg "Alias added" "Alias adicionado"): $custom_alias"
         else
-            log_warn "Formato inválido. Use nome=comando (ex: kgp=kubectl get pods)"
+            log_warn "$(msg "Invalid format. Use name=command (e.g. kgp=kubectl get pods)" "Formato inválido. Use nome=comando (ex: kgp=kubectl get pods)")"
         fi
     done
 
     # kube-ps1 prompt toggle
     printf "\n"
     local input_ps1=""
-    read -r -p "   Ativar kube-ps1 automaticamente no prompt do shell? [S/n]: " input_ps1 || true
+    read -r -p "   $(msg "Enable kube-ps1 automatically in shell prompt? [Y/n]: " "Ativar kube-ps1 automaticamente no prompt do shell? [S/n]: ")" input_ps1 || true
     if [[ "$input_ps1" =~ ^[Nn]$ ]]; then
         ENABLE_KUBE_PS1_PROMPT=false
     else
@@ -331,10 +503,10 @@ interactive_alias_form() {
 
 confirm_summary() {
     printf "\n${BOLD}${CYAN}======================================================================${NC}\n"
-    printf "${BOLD}${CYAN}  Resumo da Instalação${NC}\n"
+    printf "${BOLD}${CYAN}  %s${NC}\n" "$(msg "Installation Summary" "Resumo da Instalação")"
     printf "${BOLD}${CYAN}======================================================================${NC}\n"
 
-    printf "  ${BOLD}Ferramentas selecionadas:${NC}\n"
+    printf "  ${BOLD}%s:${NC}\n" "$(msg "Selected Tools" "Ferramentas selecionadas")"
     local any_tool=false
     for i in "${!TOOL_KEYS[@]}"; do
         if [[ "${TOOL_SELECTED[$i]}" -eq 1 ]]; then
@@ -342,9 +514,9 @@ confirm_summary() {
             any_tool=true
         fi
     done
-    [[ "$any_tool" == "false" ]] && printf "   • ${DIM}(Nenhuma ferramenta será instalada)${NC}\n"
+    [[ "$any_tool" == "false" ]] && printf "   • ${DIM}%s${NC}\n" "$(msg "(No tools will be installed)" "(Nenhuma ferramenta será instalada)")"
 
-    printf "\n  ${BOLD}Aliases que serão configurados:${NC}\n"
+    printf "\n  ${BOLD}%s:${NC}\n" "$(msg "Configured Aliases" "Aliases que serão configurados")"
     [[ -n "$ALIAS_KUBECTX" ]]  && printf "   • %s -> kubectx\n" "$ALIAS_KUBECTX"
     [[ -n "$ALIAS_KUBENS" ]]   && printf "   • %s -> kubens\n" "$ALIAS_KUBENS"
     [[ -n "$ALIAS_KUBECTL" ]]  && printf "   • %s -> kubectl\n" "$ALIAS_KUBECTL"
@@ -355,19 +527,25 @@ confirm_summary() {
         printf "   • %s -> %s\n" "$k" "$v"
     done
 
-    printf "\n  ${BOLD}Prompt kube-ps1:${NC} %s\n" "$([[ "$ENABLE_KUBE_PS1_PROMPT" == "true" ]] && echo "Ativado" || echo "Desativado")"
+    local ps1_state
+    if [[ "$ENABLE_KUBE_PS1_PROMPT" == "true" ]]; then
+        ps1_state="$(msg "Enabled" "Ativado")"
+    else
+        ps1_state="$(msg "Disabled" "Desativado")"
+    fi
+    printf "\n  ${BOLD}Prompt kube-ps1:${NC} %s\n" "$ps1_state"
     printf "${CYAN}======================================================================${NC}\n\n"
 
     local confirm=""
-    read -r -p "Confirmar e aplicar configurações? [S/n]: " confirm || true
+    read -r -p "$(msg "Confirm and apply changes? [Y/n]: " "Confirmar e aplicar configurações? [S/n]: ")" confirm || true
     if [[ "$confirm" =~ ^[Nn]$ ]]; then
-        log_warn "Operação cancelada pelo usuário."
+        log_warn "$(msg "Operation cancelled by user." "Operação cancelada pelo usuário.")"
         exit 0
     fi
 }
 
 # ------------------------------------------------------------------------------
-# 3. Privilege & Package Helpers
+# 4. Privilege & Package Helpers
 # ------------------------------------------------------------------------------
 sudo_cmd() {
     if [[ "$(id -u)" -eq 0 ]]; then
@@ -375,7 +553,7 @@ sudo_cmd() {
     elif command -v sudo >/dev/null 2>&1; then
         run_cmd sudo "$@"
     else
-        log_error "Permissão de root ou sudo necessária para: $*"
+        log_error "$(msg "Root or sudo privileges required for" "Permissão de root ou sudo necessária para"): $*"
         return 1
     fi
 }
@@ -397,7 +575,7 @@ install_pkg() {
 ensure_base_deps() {
     for dep in git curl tar; do
         if ! command -v "$dep" >/dev/null 2>&1; then
-            log_info "Instalando dependência base: $dep"
+            log_info "$(msg "Installing base dependency" "Instalando dependência base"): $dep"
             install_pkg "$dep"
         fi
     done
@@ -405,16 +583,16 @@ ensure_base_deps() {
 }
 
 # ------------------------------------------------------------------------------
-# 4. Individual Tool Installers
+# 5. Individual Tool Installers (with SHA-256 Checksum Verification)
 # ------------------------------------------------------------------------------
 install_fzf() {
-    log_info "Instalando fzf..."
+    log_info "$(msg "Installing fzf..." "Instalando fzf...")"
     if install_pkg fzf; then
-        log_ok "fzf instalado via ${PKG_MGR}"
+        log_ok "fzf $(msg "installed via" "instalado via") ${PKG_MGR}"
         return 0
     fi
 
-    log_info "Usando fallback via git para fzf..."
+    log_info "$(msg "Falling back to git installer for fzf..." "Usando fallback via git para fzf...")"
     local fzf_dir="${INSTALL_SHARE_DIR}/fzf"
     if [[ -d "$fzf_dir/.git" ]]; then
         run_cmd git -C "$fzf_dir" pull --ff-only
@@ -424,11 +602,11 @@ install_fzf() {
     fi
     run_cmd "${fzf_dir}/install" --bin
     run_cmd ln -sf "${fzf_dir}/bin/fzf" "${INSTALL_BIN_DIR}/fzf"
-    log_ok "fzf instalado em ${INSTALL_BIN_DIR}/fzf"
+    log_ok "fzf -> ${INSTALL_BIN_DIR}/fzf"
 }
 
 install_kubectx_kubens() {
-    log_info "Instalando kubectx e kubens..."
+    log_info "$(msg "Installing kubectx & kubens..." "Instalando kubectx e kubens...")"
     local repo_dir="${INSTALL_SHARE_DIR}/kubectx"
     if [[ -d "$repo_dir/.git" ]]; then
         run_cmd git -C "$repo_dir" pull --ff-only
@@ -438,63 +616,75 @@ install_kubectx_kubens() {
     fi
     run_cmd ln -sf "${repo_dir}/kubectx" "${INSTALL_BIN_DIR}/kubectx"
     run_cmd ln -sf "${repo_dir}/kubens" "${INSTALL_BIN_DIR}/kubens"
-    log_ok "kubectx e kubens instalados em ${INSTALL_BIN_DIR}"
+    log_ok "kubectx & kubens -> ${INSTALL_BIN_DIR}"
 }
 
 install_helm() {
-    log_info "Instalando helm..."
+    log_info "$(msg "Installing helm..." "Instalando helm...")"
     if [[ "$PKG_MGR" == "brew" || "$PKG_MGR" == "pacman" ]]; then
         if install_pkg helm; then
-            log_ok "helm instalado via ${PKG_MGR}"
+            log_ok "helm $(msg "installed via" "instalado via") ${PKG_MGR}"
             return 0
         fi
     fi
 
     if [[ "$DRY_RUN" == "true" ]]; then
-        log_info "[DRY-RUN] Instalaria helm via script get-helm-3 em ${INSTALL_BIN_DIR}"
+        log_info "[DRY-RUN] $(msg "Would install helm with SHA-256 verification into" "Instalaria helm com verificação SHA-256 em") ${INSTALL_BIN_DIR}"
     else
         curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | \
-            HELM_INSTALL_DIR="$INSTALL_BIN_DIR" USE_SUDO="false" bash
-        log_ok "helm instalado em ${INSTALL_BIN_DIR}/helm"
+            HELM_INSTALL_DIR="$INSTALL_BIN_DIR" USE_SUDO="false" VERIFY_CHECKSUM="true" bash
+        log_ok "helm -> ${INSTALL_BIN_DIR}/helm"
     fi
 }
 
 install_k9s() {
-    log_info "Instalando k9s..."
+    log_info "$(msg "Installing k9s..." "Instalando k9s...")"
     if [[ "$PKG_MGR" == "brew" || "$PKG_MGR" == "pacman" ]]; then
         if install_pkg k9s; then
-            log_ok "k9s instalado via ${PKG_MGR}"
+            log_ok "k9s $(msg "installed via" "instalado via") ${PKG_MGR}"
             return 0
         fi
     fi
 
     local os_title
     [[ "$OS" == "linux" ]] && os_title="Linux" || os_title="Darwin"
+    local archive_name="k9s_${os_title}_${ARCH_K9S}.tar.gz"
 
     if [[ "$DRY_RUN" == "true" ]]; then
-        log_info "[DRY-RUN] Baixaria k9s_${os_title}_${ARCH_K9S}.tar.gz em ${INSTALL_BIN_DIR}/k9s"
+        log_info "[DRY-RUN] $(msg "Would download & verify SHA-256 for" "Baixaria e verificaria SHA-256 de") ${archive_name} -> ${INSTALL_BIN_DIR}/k9s"
         return 0
     fi
 
     local latest_tag
     latest_tag="$(curl -fsSL https://api.github.com/repos/derailed/k9s/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')"
     if [[ -z "$latest_tag" ]]; then
-        log_error "Falha ao obter a versão mais recente do k9s no GitHub"
+        log_error "$(msg "Failed to fetch latest k9s release tag" "Falha ao obter a versão mais recente do k9s")"
         return 1
     fi
 
-    local tarball_url="https://github.com/derailed/k9s/releases/download/${latest_tag}/k9s_${os_title}_${ARCH_K9S}.tar.gz"
+    local base_url="https://github.com/derailed/k9s/releases/download/${latest_tag}"
     local tmp_dir
     tmp_dir="$(mktemp -d)"
-    curl -fsSL "$tarball_url" -o "${tmp_dir}/k9s.tar.gz"
-    tar -xzf "${tmp_dir}/k9s.tar.gz" -C "$tmp_dir" k9s
+
+    curl -fsSL "${base_url}/${archive_name}" -o "${tmp_dir}/${archive_name}"
+    curl -fsSL "${base_url}/checksums.txt" -o "${tmp_dir}/checksums.txt"
+
+    local expected_sha
+    expected_sha="$(awk -v f="$archive_name" '$2 == f {print $1}' "${tmp_dir}/checksums.txt" | head -n1)"
+    if [[ -n "$expected_sha" ]]; then
+        verify_sha256 "${tmp_dir}/${archive_name}" "$expected_sha"
+    else
+        log_warn "$(msg "Checksum entry not found for" "Entrada de checksum não encontrada para") ${archive_name}"
+    fi
+
+    tar -xzf "${tmp_dir}/${archive_name}" -C "$tmp_dir" k9s
     install -m 0755 "${tmp_dir}/k9s" "${INSTALL_BIN_DIR}/k9s"
     rm -rf "$tmp_dir"
-    log_ok "k9s (${latest_tag}) instalado em ${INSTALL_BIN_DIR}/k9s"
+    log_ok "k9s (${latest_tag}) -> ${INSTALL_BIN_DIR}/k9s"
 }
 
 install_kubetail() {
-    log_info "Instalando kubetail..."
+    log_info "$(msg "Installing kubetail..." "Instalando kubetail...")"
     local repo_dir="${INSTALL_SHARE_DIR}/kubetail"
     if [[ -d "$repo_dir/.git" ]]; then
         run_cmd git -C "$repo_dir" pull --ff-only
@@ -503,11 +693,11 @@ install_kubetail() {
         run_cmd git clone --depth 1 https://github.com/johanhaleby/kubetail.git "$repo_dir"
     fi
     run_cmd ln -sf "${repo_dir}/kubetail" "${INSTALL_BIN_DIR}/kubetail"
-    log_ok "kubetail instalado em ${INSTALL_BIN_DIR}/kubetail"
+    log_ok "kubetail -> ${INSTALL_BIN_DIR}/kubetail"
 }
 
 install_kube_ps1() {
-    log_info "Instalando kube-ps1..."
+    log_info "$(msg "Installing kube-ps1..." "Instalando kube-ps1...")"
     local repo_dir="${INSTALL_SHARE_DIR}/kube-ps1"
     if [[ -d "$repo_dir/.git" ]]; then
         run_cmd git -C "$repo_dir" pull --ff-only
@@ -515,7 +705,7 @@ install_kube_ps1() {
         run_cmd rm -rf "$repo_dir"
         run_cmd git clone --depth 1 https://github.com/jonmosco/kube-ps1.git "$repo_dir"
     fi
-    log_ok "kube-ps1 instalado em ${repo_dir}"
+    log_ok "kube-ps1 -> ${repo_dir}"
 }
 
 run_selected_installers() {
@@ -529,14 +719,14 @@ run_selected_installers() {
 }
 
 # ------------------------------------------------------------------------------
-# 5. Shell RC Configuration (Bash, Zsh, Fish)
+# 6. Shell RC Configuration (Bash, Zsh, Fish)
 # ------------------------------------------------------------------------------
 remove_block_from_file() {
     local rc_file="$1"
     [[ -f "$rc_file" ]] || return 0
     if grep -q "$MARKER_BEGIN" "$rc_file"; then
         if [[ "$DRY_RUN" == "true" ]]; then
-            log_info "[DRY-RUN] Removeria bloco anterior de $rc_file"
+            log_info "[DRY-RUN] $(msg "Would remove previous block from" "Removeria bloco anterior de") $rc_file"
         else
             local tmp_file="${rc_file}.kubetools.tmp"
             awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" '
@@ -608,11 +798,11 @@ EOF
 )"
 
     if [[ "$DRY_RUN" == "true" ]]; then
-        log_info "[DRY-RUN] Atualizaria ${rc_file} (${shell_type})"
+        log_info "[DRY-RUN] $(msg "Would update" "Atualizaria") ${rc_file} (${shell_type})"
     else
         touch "$rc_file"
         printf "\n%s\n" "$block" >> "$rc_file"
-        log_ok "Configurado ${rc_file} (${shell_type})"
+        log_ok "$(msg "Configured" "Configurado") ${rc_file} (${shell_type})"
     fi
 }
 
@@ -644,17 +834,17 @@ EOF
 )"
 
     if [[ "$DRY_RUN" == "true" ]]; then
-        log_info "[DRY-RUN] Atualizaria ${fish_rc} (fish)"
+        log_info "[DRY-RUN] $(msg "Would update" "Atualizaria") ${fish_rc} (fish)"
     else
         mkdir -p "$(dirname "$fish_rc")"
         touch "$fish_rc"
         printf "\n%s\n" "$block" >> "$fish_rc"
-        log_ok "Configurado ${fish_rc} (fish)"
+        log_ok "$(msg "Configured" "Configurado") ${fish_rc} (fish)"
     fi
 }
 
 configure_shells() {
-    log_info "Aplicando configurações de shell e aliases..."
+    log_info "$(msg "Applying shell and alias configurations..." "Aplicando configurações de shell e aliases...")"
 
     if [[ "$USER_SHELL" == "bash" || -f "${HOME}/.bashrc" ]]; then
         configure_posix_rc "${HOME}/.bashrc" "bash"
@@ -670,10 +860,10 @@ configure_shells() {
 }
 
 # ------------------------------------------------------------------------------
-# 6. Uninstall / Rollback
+# 7. Uninstall / Rollback
 # ------------------------------------------------------------------------------
 uninstall_all() {
-    log_info "Revertendo instalação do kube-tools (rollback)..."
+    log_info "$(msg "Rolling back kube-tools installation..." "Revertendo instalação do kube-tools (rollback)...")"
     remove_block_from_file "${HOME}/.bashrc"
     remove_block_from_file "${HOME}/.zshrc"
     remove_block_from_file "${HOME}/.config/fish/config.fish"
@@ -681,15 +871,15 @@ uninstall_all() {
     for bin in kubectx kubens kubetail k9s helm fzf; do
         if [[ -L "${INSTALL_BIN_DIR}/${bin}" || -f "${INSTALL_BIN_DIR}/${bin}" ]]; then
             run_cmd rm -f "${INSTALL_BIN_DIR}/${bin}"
-            log_ok "Removido ${INSTALL_BIN_DIR}/${bin}"
+            log_ok "$(msg "Removed" "Removido") ${INSTALL_BIN_DIR}/${bin}"
         fi
     done
 
     if [[ -d "$INSTALL_SHARE_DIR" ]]; then
         run_cmd rm -rf "$INSTALL_SHARE_DIR"
-        log_ok "Removido ${INSTALL_SHARE_DIR}"
+        log_ok "$(msg "Removed" "Removido") ${INSTALL_SHARE_DIR}"
     fi
-    log_ok "Rollback concluído com sucesso."
+    log_ok "$(msg "Rollback completed successfully." "Rollback concluído com sucesso.")"
 }
 
 # ------------------------------------------------------------------------------
@@ -704,6 +894,12 @@ main() {
     fi
 
     check_installed_tools
+
+    if [[ "$DOCTOR_MODE" == "true" ]]; then
+        run_doctor
+        exit 0
+    fi
+
     print_diagnostic_report
 
     if [[ "$NON_INTERACTIVE" == "false" ]]; then
@@ -711,7 +907,7 @@ main() {
         interactive_alias_form
         confirm_summary
     else
-        log_info "Modo não-interativo ativo: instalando ferramentas ausentes com aliases padrão (kctx, kns)."
+        log_info "$(msg "Non-interactive mode: installing missing tools with default aliases (kctx, kns)." "Modo não-interativo ativo: instalando ferramentas ausentes com aliases padrão (kctx, kns).")"
     fi
 
     ensure_base_deps
@@ -719,8 +915,8 @@ main() {
     configure_shells
 
     printf "\n"
-    log_ok "Processo finalizado com sucesso!"
-    log_info "Recarregue seu shell para ativar os aliases:"
+    log_ok "$(msg "All operations completed successfully!" "Processo finalizado com sucesso!")"
+    log_info "$(msg "Reload your shell to activate aliases:" "Recarregue seu shell para ativar os aliases:")"
     case "$USER_SHELL" in
         zsh)  printf "  source ~/.zshrc\n" ;;
         fish) printf "  source ~/.config/fish/config.fish\n" ;;

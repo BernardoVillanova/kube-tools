@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    name: Verify & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run ShellCheck (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: shellcheck ./install.sh ./tests/test_installer.sh
+
+      - name: Run Doctor Health Check
+        run: ./install.sh --doctor --lang en
+
+      - name: Run Automated Sandbox Test Suite
+        run: make test
+
+      - name: Run Dry-Run Simulation (Non-Interactive)
+        run: ./install.sh --dry-run --yes --lang en

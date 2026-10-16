@@ -1,61 +1,142 @@
 # kube-tools
 
-Automatização interativa para auditoria, instalação e configuração de ferramentas essenciais de Kubernetes no terminal, com detecção automática de Sistema Operacional, arquitetura, gerenciador de pacotes e shell (`bash`, `zsh`, `fish`).
+[![CI](https://github.com/BernardoVillanova/kube-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/BernardoVillanova/kube-tools/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![Shell: Bash/Zsh/Fish](https://img.shields.io/badge/Shell-Bash%20%7C%20Zsh%20%7C%20Fish-4EAA25)](./install.sh)
+[![Platform: Linux & macOS](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-informational)](./install.sh)
 
-## Fluxo do Formulário Interativo
+> 🌐 **Language / Idioma:** **English** (current) | **[Português (Brasil)](./README.pt-BR.md)**
 
-Ao executar `./install.sh`, o script guia você por 4 etapas:
+**`kube-tools`** is a centralized, single-script interactive installer and shell configurator for the essential Kubernetes CLI ecosystem (`fzf`, `kubectx`, `kubens`, `helm`, `k9s`, `kubetail`, and `kube-ps1`).
 
-1. **Diagnóstico e Verificação Inicial**:
-   - Identifica SO, distribuição, arquitetura (`amd64`/`arm64`), gerenciador de pacotes e shell ativo.
-   - Verifica quais ferramentas **já estão instaladas** (`✔ [Já instalado]`) e quais estão **ausentes** (`✗ [Não instalado]`), pré-selecionando apenas as que faltam.
-2. **Seleção de Ferramentas (Checklist Interativo)**:
-   - Permite marcar ou desmarcar individualmente quais ferramentas deseja instalar ou atualizar (`1` a `6`, `a` para todas, `m` apenas ausentes, `n` nenhuma).
-3. **Personalização de Aliases e Prompt**:
-   - Permite manter os aliases padrão (`kctx` para `kubectx` e `kns` para `kubens`), alterá-los para outro nome ou desativá-los.
-   - Permite criar aliases opcionais para `kubectl` (ex: `k`), `kubetail` (ex: `kt`) e adicionar quantos aliases extras desejar no formato `nome=comando` (ex: `kgp=kubectl get pods`).
-   - Permite escolher se deseja ativar o `kube-ps1` automaticamente no prompt.
-4. **Resumo e Confirmação**:
-   - Exibe tudo o que será feito antes de aplicar qualquer alteração no sistema.
+It automatically audits your environment, detects your Operating System, CPU architecture, package manager, and active shell (`bash`, `zsh`, `fish`), verifies binary integrity via **SHA-256 checksums**, and configures custom shell aliases (`kctx`, `kns`, and user-defined shortcuts) idempotently.
 
-## Ferramentas Disponíveis
+---
 
-- **[fzf](https://github.com/junegunn/fzf)** — Busca interativa fuzzy para seleção rápida de contextos e namespaces.
-- **[kubectx & kubens](https://github.com/ahmetb/kubectx)** — Alternância rápida entre contextos (`kubectx`) e namespaces (`kubens`).
-- **[helm](https://helm.sh/)** — Gerenciador de pacotes para Kubernetes.
-- **[k9s](https://k9scli.io/)** — Terminal UI interativo para observabilidade e gerenciamento de clusters.
-- **[kubetail](https://github.com/johanhaleby/kubetail)** — Agregador de logs de múltiplos pods simultaneamente.
-- **[kube-ps1](https://github.com/jonmosco/kube-ps1)** — Exibição do contexto e namespace atual do Kubernetes diretamente no prompt do shell.
+## Why `kube-tools`?
 
-## Como Usar
+Setting up a new workstation or DevOps jumpbox usually requires visiting 6+ repositories, looking up release tarballs for your architecture, and manually editing `.bashrc`, `.zshrc`, or `config.fish`.
 
-### Modo Interativo (Formulário)
+`kube-tools` centralizes the entire workflow into a single, auditable script ([`install.sh`](./install.sh)) backed by automated tests, SHA-256 verification, a read-only `--doctor` diagnostic mode, and instant `--uninstall` rollback:
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                        ./install.sh Execution Flow                       │
+├──────────────────────────────────────────────────────────────────────────┤
+│  1. Pre-Flight Audit   -> Detects OS, Arch, Pkg Manager, Shell & Versions│
+│  2. Interactive Form   -> Toggle tools to install + customize aliases    │
+│  3. Verified Download  -> Package Mgr / Upstream Git / SHA-256 Tarballs  │
+│  4. Idempotent Config  -> Updates ~/.bashrc, ~/.zshrc, config.fish       │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Included Toolchain
+
+| Tool | Upstream | Description | Verification Method |
+| :--- | :--- | :--- | :--- |
+| **[fzf](https://github.com/junegunn/fzf)** | `junegunn/fzf` | Interactive fuzzy finder for `kubectx` & `kubens` | System Package Mgr / Shallow Git Clone |
+| **[kubectx & kubens](https://github.com/ahmetb/kubectx)** | `ahmetb/kubectx` | Fast switching between Kubernetes contexts and namespaces | Official Git Repo |
+| **[helm](https://helm.sh/)** | `helm/helm` | The Kubernetes Package Manager | SHA-256 Checksum (`VERIFY_CHECKSUM=true`) |
+| **[k9s](https://k9scli.io/)** | `derailed/k9s` | Terminal UI to observe and manage Kubernetes clusters | Official `checksums.txt` SHA-256 verification |
+| **[kubetail](https://github.com/johanhaleby/kubetail)** | `johanhaleby/kubetail` | Aggregate logs from multiple pods simultaneously | Official Git Repo |
+| **[kube-ps1](https://github.com/jonmosco/kube-ps1)** | `jonmosco/kube-ps1` | Display current K8s context & namespace on shell prompt | Official Git Repo |
+
+---
+
+## Interactive Wizard (4-Step Bash Form)
+
+When you run `./install.sh`, an interactive terminal wizard guides you through:
+
+1. **Environment & Installed Tools Audit**:
+   - Inspects your OS, architecture (`amd64`/`arm64`), package manager, `kubectl` client version, and checks which tools are **already installed** (`✔ [Installed]`) vs **missing** (`✗ [Not installed]`), pre-selecting only the missing ones.
+2. **Tool Selection Checklist**:
+   - Toggle individual tools (`1`–`6`), select all (`a`), select missing only (`m`), or select none (`n`).
+3. **Alias & Prompt Customization**:
+   - Keep default aliases (`kctx` -> `kubectx`, `kns` -> `kubens`), customize them to any name, or disable them (`-`).
+   - Optionally define aliases for `kubectl` (e.g., `k`), `kubetail` (e.g., `kt`), and add unlimited custom aliases in `name=command` format (e.g., `kgp=kubectl get pods`).
+   - Choose whether to enable `kube-ps1` in your shell prompt automatically.
+4. **Confirmation Summary**:
+   - Review all selected tools and aliases before any change is applied to disk.
+
+---
+
+## Quick Start
+
+### 1. Clone & Run Interactive Installer
 
 ```bash
+git clone https://github.com/BernardoVillanova/kube-tools.git
+cd kube-tools
 chmod +x install.sh
 ./install.sh
 ```
 
-### Pré-verificação (Dry-Run)
-
-Audite o formulário ou o modo automático sem alterar o sistema:
+### 2. Direct One-Liner (Non-Interactive / Default Aliases)
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/BernardoVillanova/kube-tools/main/install.sh | bash -s -- --yes
+```
+
+---
+
+## CLI Options & Verifications
+
+```bash
+# Run read-only health, PATH, SHA-256 engine, and connectivity diagnostics
+./install.sh --doctor
+
+# Preview the wizard or installation without modifying the system
 ./install.sh --dry-run
-```
 
-### Modo Automático (Sem perguntas / CI)
+# Force English or Portuguese interface explicitly
+./install.sh --lang en
+./install.sh --lang pt
 
-Instala todas as ferramentas ausentes e configura `kctx` e `kns` automaticamente:
-
-```bash
+# Non-interactive mode (installs all missing tools + kctx/kns aliases)
 ./install.sh --yes
-```
 
-### Rollback / Desinstalação
-
-Para reverter todas as alterações nos arquivos de configuração do shell e remover os binários gerenciados em `~/.local/bin` e `~/.local/share/kube-tools`:
-
-```bash
+# Complete rollback (removes managed binaries, repos, and shell RC blocks)
 ./install.sh --uninstall
 ```
+
+---
+
+## Repository Structure & Quality Assurance
+
+This repository includes automated verification scripts and CI pipelines so you can audit and test the installer before running it on production workstations:
+
+```text
+kube-tools/
+├── .github/workflows/ci.yml   # GitHub Actions CI (ShellCheck + sandboxed test suite)
+├── tests/test_installer.sh    # Automated sandbox tests (dry-run, doctor, aliases, rollback)
+├── install.sh                 # Centralized single-file installer & shell configurator
+├── Makefile                   # Developer & operator shortcuts (make doctor, make test)
+├── SECURITY.md                # Security model, SHA-256 verification & immutability notes
+├── LICENSE                    # MIT License
+├── README.md                  # English documentation (default)
+└── README.pt-BR.md            # Portuguese documentation
+```
+
+### Running the Test Suite Locally
+
+All tests run inside an isolated temporary `$HOME` directory and never touch your real user configuration:
+
+```bash
+make test
+```
+
+---
+
+## Supported Environments
+
+- **Operating Systems:** Linux (Debian/Ubuntu `apt`, Arch/CachyOS `pacman`, Fedora/RHEL `dnf`/`yum`, openSUSE `zypper`, Alpine `apk`) and macOS (`brew`).
+- **Architectures:** `x86_64` (`amd64`) and `aarch64` (`arm64`).
+- **Shells:** `bash` (`~/.bashrc`), `zsh` (`~/.zshrc`), and `fish` (`~/.config/fish/config.fish`).
+
+---
+
+## License
+
+Released under the [MIT License](./LICENSE).
