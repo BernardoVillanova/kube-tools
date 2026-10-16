@@ -523,11 +523,13 @@ confirm_summary() {
     [[ -n "$ALIAS_KUBENS" ]]   && printf "   • %s -> kubens\n" "$ALIAS_KUBENS"
     [[ -n "$ALIAS_KUBECTL" ]]  && printf "   • %s -> kubectl\n" "$ALIAS_KUBECTL"
     [[ -n "$ALIAS_KUBETAIL" ]] && printf "   • %s -> kubetail\n" "$ALIAS_KUBETAIL"
-    for extra in "${EXTRA_ALIASES[@]}"; do
-        local k="${extra%%=*}"
-        local v="${extra#*=}"
-        printf "   • %s -> %s\n" "$k" "$v"
-    done
+    if [[ ${#EXTRA_ALIASES[@]} -gt 0 ]]; then
+        for extra in "${EXTRA_ALIASES[@]}"; do
+            local k="${extra%%=*}"
+            local v="${extra#*=}"
+            printf "   • %s -> %s\n" "$k" "$v"
+        done
+    fi
 
     local ps1_state
     if [[ "$ENABLE_KUBE_PS1_PROMPT" == "true" ]]; then
@@ -781,11 +783,13 @@ build_posix_aliases() {
     [[ -n "$ALIAS_KUBENS" ]]   && lines+="alias ${ALIAS_KUBENS}='kubens'"$'\n'
     [[ -n "$ALIAS_KUBECTL" ]]  && lines+="alias ${ALIAS_KUBECTL}='kubectl'"$'\n'
     [[ -n "$ALIAS_KUBETAIL" ]] && lines+="alias ${ALIAS_KUBETAIL}='kubetail'"$'\n'
-    for extra in "${EXTRA_ALIASES[@]}"; do
-        local k="${extra%%=*}"
-        local v="${extra#*=}"
-        lines+="alias ${k}='${v}'"$'\n'
-    done
+    if [[ ${#EXTRA_ALIASES[@]} -gt 0 ]]; then
+        for extra in "${EXTRA_ALIASES[@]}"; do
+            local k="${extra%%=*}"
+            local v="${extra#*=}"
+            lines+="alias ${k}='${v}'"$'\n'
+        done
+    fi
     printf "%s" "$lines"
 }
 
@@ -795,11 +799,13 @@ build_fish_aliases() {
     [[ -n "$ALIAS_KUBENS" ]]   && lines+="alias ${ALIAS_KUBENS} 'kubens'"$'\n'
     [[ -n "$ALIAS_KUBECTL" ]]  && lines+="alias ${ALIAS_KUBECTL} 'kubectl'"$'\n'
     [[ -n "$ALIAS_KUBETAIL" ]] && lines+="alias ${ALIAS_KUBETAIL} 'kubetail'"$'\n'
-    for extra in "${EXTRA_ALIASES[@]}"; do
-        local k="${extra%%=*}"
-        local v="${extra#*=}"
-        lines+="alias ${k} '${v}'"$'\n'
-    done
+    if [[ ${#EXTRA_ALIASES[@]} -gt 0 ]]; then
+        for extra in "${EXTRA_ALIASES[@]}"; do
+            local k="${extra%%=*}"
+            local v="${extra#*=}"
+            lines+="alias ${k} '${v}'"$'\n'
+        done
+    fi
     printf "%s" "$lines"
 }
 
