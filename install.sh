@@ -8,9 +8,10 @@
 
 set -euo pipefail
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 INSTALL_BIN_DIR="${HOME}/.local/bin"
 INSTALL_SHARE_DIR="${HOME}/.local/share/kube-tools"
+MANIFEST_FILE="${INSTALL_SHARE_DIR}/manifest.state"
 MARKER_BEGIN="# >>> kube-tools initialize >>>"
 MARKER_END="# <<< kube-tools initialize <<<"
 
@@ -582,12 +583,27 @@ ensure_base_deps() {
     run_cmd mkdir -p "$INSTALL_BIN_DIR" "$INSTALL_SHARE_DIR"
 }
 
+record_manifest() {
+    local entry="$1"
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_info "[DRY-RUN] $(msg "Would record in manifest" "Registraria no manifesto"): $entry"
+        return 0
+    fi
+    mkdir -p "$INSTALL_SHARE_DIR"
+    touch "$MANIFEST_FILE"
+    if ! grep -qxF "$entry" "$MANIFEST_FILE" 2>/dev/null; then
+        printf "%s\n" "$entry" >> "$MANIFEST_FILE"
+    fi
+}
+
 # ------------------------------------------------------------------------------
-# 5. Individual Tool Installers (with SHA-256 Checksum Verification)
+# 5. Individual Tool Installers (with SHA-256 Checksum & Manifest Tracking)
 # ------------------------------------------------------------------------------
 install_fzf() {
+    local pre_installed="${TOOL_INSTALLED[0]}"
     log_info "$(msg "Installing fzf..." "Instalando fzf...")"
     if install_pkg fzf; then
+        [[ "$pre_installed" -eq 0 ]] && record_manifest "pkg:${PKG_MGR}:fzf"
         log_ok "fzf $(msg "installed via" "instalado via") ${PKG_MGR}"
         return 0
     fi
@@ -602,10 +618,13 @@ install_fzf() {
     fi
     run_cmd "${fzf_dir}/install" --bin
     run_cmd ln -sf "${fzf_dir}/bin/fzf" "${INSTALL_BIN_DIR}/fzf"
+    [[ "$pre_installed" -eq 0 ]] && record_manifest "file:${INSTALL_BIN_DIR}/fzf"
+    record_manifest "dir:${fzf_dir}"
     log_ok "fzf -> ${INSTALL_BIN_DIR}/fzf"
 }
 
 install_kubectx_kubens() {
+    local pre_installed="${TOOL_INSTALLED[1]}"
     log_info "$(msg "Installing kubectx & kubens..." "Instalando kubectx e kubens...")"
     local repo_dir="${INSTALL_SHARE_DIR}/kubectx"
     if [[ -d "$repo_dir/.git" ]]; then
@@ -616,13 +635,20 @@ install_kubectx_kubens() {
     fi
     run_cmd ln -sf "${repo_dir}/kubectx" "${INSTALL_BIN_DIR}/kubectx"
     run_cmd ln -sf "${repo_dir}/kubens" "${INSTALL_BIN_DIR}/kubens"
+    if [[ "$pre_installed" -eq 0 ]]; then
+        record_manifest "file:${INSTALL_BIN_DIR}/kubectx"
+        record_manifest "file:${INSTALL_BIN_DIR}/kubens"
+    fi
+    record_manifest "dir:${repo_dir}"
     log_ok "kubectx & kubens -> ${INSTALL_BIN_DIR}"
 }
 
 install_helm() {
+    local pre_installed="${TOOL_INSTALLED[2]}"
     log_info "$(msg "Installing helm..." "Instalando helm...")"
     if [[ "$PKG_MGR" == "brew" || "$PKG_MGR" == "pacman" ]]; then
         if install_pkg helm; then
+            [[ "$pre_installed" -eq 0 ]] && record_manifest "pkg:${PKG_MGR}:helm"
             log_ok "helm $(msg "installed via" "instalado via") ${PKG_MGR}"
             return 0
         fi
@@ -633,14 +659,17 @@ install_helm() {
     else
         curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | \
             HELM_INSTALL_DIR="$INSTALL_BIN_DIR" USE_SUDO="false" VERIFY_CHECKSUM="true" bash
+        [[ "$pre_installed" -eq 0 ]] && record_manifest "file:${INSTALL_BIN_DIR}/helm"
         log_ok "helm -> ${INSTALL_BIN_DIR}/helm"
     fi
 }
 
 install_k9s() {
+    local pre_installed="${TOOL_INSTALLED[3]}"
     log_info "$(msg "Installing k9s..." "Instalando k9s...")"
     if [[ "$PKG_MGR" == "brew" || "$PKG_MGR" == "pacman" ]]; then
         if install_pkg k9s; then
+            [[ "$pre_installed" -eq 0 ]] && record_manifest "pkg:${PKG_MGR}:k9s"
             log_ok "k9s $(msg "installed via" "instalado via") ${PKG_MGR}"
             return 0
         fi
@@ -680,10 +709,12 @@ install_k9s() {
     tar -xzf "${tmp_dir}/${archive_name}" -C "$tmp_dir" k9s
     install -m 0755 "${tmp_dir}/k9s" "${INSTALL_BIN_DIR}/k9s"
     rm -rf "$tmp_dir"
+    [[ "$pre_installed" -eq 0 ]] && record_manifest "file:${INSTALL_BIN_DIR}/k9s"
     log_ok "k9s (${latest_tag}) -> ${INSTALL_BIN_DIR}/k9s"
 }
 
 install_kubetail() {
+    local pre_installed="${TOOL_INSTALLED[4]}"
     log_info "$(msg "Installing kubetail..." "Instalando kubetail...")"
     local repo_dir="${INSTALL_SHARE_DIR}/kubetail"
     if [[ -d "$repo_dir/.git" ]]; then
@@ -693,10 +724,13 @@ install_kubetail() {
         run_cmd git clone --depth 1 https://github.com/johanhaleby/kubetail.git "$repo_dir"
     fi
     run_cmd ln -sf "${repo_dir}/kubetail" "${INSTALL_BIN_DIR}/kubetail"
+    [[ "$pre_installed" -eq 0 ]] && record_manifest "file:${INSTALL_BIN_DIR}/kubetail"
+    record_manifest "dir:${repo_dir}"
     log_ok "kubetail -> ${INSTALL_BIN_DIR}/kubetail"
 }
 
 install_kube_ps1() {
+    local pre_installed="${TOOL_INSTALLED[5]}"
     log_info "$(msg "Installing kube-ps1..." "Instalando kube-ps1...")"
     local repo_dir="${INSTALL_SHARE_DIR}/kube-ps1"
     if [[ -d "$repo_dir/.git" ]]; then
@@ -705,6 +739,7 @@ install_kube_ps1() {
         run_cmd rm -rf "$repo_dir"
         run_cmd git clone --depth 1 https://github.com/jonmosco/kube-ps1.git "$repo_dir"
     fi
+    [[ "$pre_installed" -eq 0 ]] && record_manifest "dir:${repo_dir}"
     log_ok "kube-ps1 -> ${repo_dir}"
 }
 
@@ -860,26 +895,66 @@ configure_shells() {
 }
 
 # ------------------------------------------------------------------------------
-# 7. Uninstall / Rollback
+# 7. Uninstall / Rollback (Strictly Scoped by Manifest State)
 # ------------------------------------------------------------------------------
+uninstall_pkg() {
+    local mgr="$1"
+    local pkg="$2"
+    case "$mgr" in
+        apt)    sudo_cmd apt-get remove -y "$pkg" ;;
+        pacman) sudo_cmd pacman -Rns --noconfirm "$pkg" ;;
+        dnf)    sudo_cmd dnf remove -y "$pkg" ;;
+        yum)    sudo_cmd yum remove -y "$pkg" ;;
+        zypper) sudo_cmd zypper --non-interactive remove "$pkg" ;;
+        apk)    sudo_cmd apk del "$pkg" ;;
+        brew)   run_cmd brew uninstall "$pkg" ;;
+        *)      return 1 ;;
+    esac
+}
+
 uninstall_all() {
-    log_info "$(msg "Rolling back kube-tools installation..." "Revertendo instalação do kube-tools (rollback)...")"
+    log_info "$(msg "Rolling back kube-tools installation (strictly manifest-tracked items)..." "Revertendo instalação do kube-tools (apenas itens rastreados no manifesto)...")"
     remove_block_from_file "${HOME}/.bashrc"
     remove_block_from_file "${HOME}/.zshrc"
     remove_block_from_file "${HOME}/.config/fish/config.fish"
 
-    for bin in kubectx kubens kubetail k9s helm fzf; do
-        if [[ -L "${INSTALL_BIN_DIR}/${bin}" || -f "${INSTALL_BIN_DIR}/${bin}" ]]; then
-            run_cmd rm -f "${INSTALL_BIN_DIR}/${bin}"
-            log_ok "$(msg "Removed" "Removido") ${INSTALL_BIN_DIR}/${bin}"
-        fi
-    done
-
-    if [[ -d "$INSTALL_SHARE_DIR" ]]; then
-        run_cmd rm -rf "$INSTALL_SHARE_DIR"
-        log_ok "$(msg "Removed" "Removido") ${INSTALL_SHARE_DIR}"
+    if [[ -f "$MANIFEST_FILE" ]]; then
+        while IFS= read -r entry || [[ -n "$entry" ]]; do
+            [[ -z "$entry" ]] && continue
+            local kind="${entry%%:*}"
+            local rest="${entry#*:}"
+            case "$kind" in
+                file)
+                    if [[ -L "$rest" || -f "$rest" ]]; then
+                        run_cmd rm -f "$rest"
+                        log_ok "$(msg "Removed tracked binary" "Binário rastreado removido"): $rest"
+                    fi
+                    ;;
+                dir)
+                    if [[ -d "$rest" ]]; then
+                        run_cmd rm -rf "$rest"
+                        log_ok "$(msg "Removed tracked directory" "Diretório rastreado removido"): $rest"
+                    fi
+                    ;;
+                pkg)
+                    local mgr="${rest%%:*}"
+                    local pkg="${rest#*:}"
+                    log_info "$(msg "Removing package installed by kube-tools" "Removendo pacote instalado pelo kube-tools"): ${pkg} (${mgr})"
+                    uninstall_pkg "$mgr" "$pkg" || log_warn "$(msg "Could not auto-remove package" "Não foi possível remover pacote automaticamente"): $pkg"
+                    ;;
+            esac
+        done < "$MANIFEST_FILE"
+        run_cmd rm -f "$MANIFEST_FILE"
+    else
+        log_info "$(msg "No manifest.state found — no pre-existing binaries were touched." "Nenhum manifest.state encontrado — nenhum binário pré-existente foi tocado.")"
     fi
-    log_ok "$(msg "Rollback completed successfully." "Rollback concluído com sucesso.")"
+
+    # Remove share dir if empty
+    if [[ -d "$INSTALL_SHARE_DIR" ]] && [[ -z "$(ls -A "$INSTALL_SHARE_DIR" 2>/dev/null)" ]]; then
+        run_cmd rmdir "$INSTALL_SHARE_DIR"
+    fi
+
+    log_ok "$(msg "Rollback completed safely (pre-existing tools preserved)." "Rollback concluído com segurança (ferramentas pré-existentes preservadas).")"
 }
 
 # ------------------------------------------------------------------------------

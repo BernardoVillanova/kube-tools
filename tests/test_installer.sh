@@ -115,11 +115,35 @@ assert_contains "$marker_count" "1" "Idempotent RC block update (single block in
 assert_file_not_contains "${SANDBOX_HOME}/.bashrc" "mykctx" "Old custom alias cleanly replaced on re-run"
 assert_file_contains "${SANDBOX_HOME}/.bashrc" "alias kctx='kubectx'" "New default alias present after re-run"
 
-# Test uninstall / rollback
+# Test uninstall / rollback preserves pre-existing tools and only deletes manifest-tracked items
+mkdir -p "${SANDBOX_HOME}/.local/bin" "${SANDBOX_HOME}/.local/share/kube-tools"
+printf "#!/bin/sh\necho 'pre-existing fzf'\n" > "${SANDBOX_HOME}/.local/bin/fzf"
+chmod +x "${SANDBOX_HOME}/.local/bin/fzf"
+
+# Simulate a binary that WAS installed and tracked by kube-tools
+printf "#!/bin/sh\necho 'managed kubectx'\n" > "${SANDBOX_HOME}/.local/bin/kubectx"
+printf "file:%s/.local/bin/kubectx\n" "$SANDBOX_HOME" > "${SANDBOX_HOME}/.local/share/kube-tools/manifest.state"
+
 HOME="$SANDBOX_HOME" SHELL="/bin/bash" "$INSTALLER" --uninstall --lang en >/dev/null
 assert_file_not_contains "${SANDBOX_HOME}/.bashrc" "kube-tools initialize" "Rollback removes block from .bashrc"
 assert_file_not_contains "${SANDBOX_HOME}/.zshrc" "kube-tools initialize" "Rollback removes block from .zshrc"
 assert_file_not_contains "${SANDBOX_HOME}/.config/fish/config.fish" "kube-tools initialize" "Rollback removes block from config.fish"
+
+if [[ -f "${SANDBOX_HOME}/.local/bin/fzf" ]]; then
+    printf "  \033[0;32m✔ PASS:\033[0m Pre-existing fzf binary preserved after --uninstall\n"
+    PASS=$((PASS + 1))
+else
+    printf "  \033[0;31m✘ FAIL:\033[0m Pre-existing fzf binary was deleted by --uninstall!\n"
+    FAIL=$((FAIL + 1))
+fi
+
+if [[ ! -f "${SANDBOX_HOME}/.local/bin/kubectx" ]]; then
+    printf "  \033[0;32m✔ PASS:\033[0m Manifest-tracked kubectx binary removed by --uninstall\n"
+    PASS=$((PASS + 1))
+else
+    printf "  \033[0;31m✘ FAIL:\033[0m Manifest-tracked kubectx binary was not removed!\n"
+    FAIL=$((FAIL + 1))
+fi
 
 printf "\n\033[1;32mSummary: %d passed, %d failed\033[0m\n" "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
