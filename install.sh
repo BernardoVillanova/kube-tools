@@ -281,19 +281,19 @@ check_installed_tools() {
 
     # Pre-select tools that are NOT installed yet
     for i in "${!TOOL_KEYS[@]}"; do
-        if [[ "${TOOL_INSTALLED[$i]}" -eq 0 ]]; then
-            TOOL_SELECTED[$i]=1
+        if [[ "${TOOL_INSTALLED[i]}" -eq 0 ]]; then
+            TOOL_SELECTED[i]=1
         else
-            TOOL_SELECTED[$i]=0
+            TOOL_SELECTED[i]=0
         fi
     done
 }
 
 print_diagnostic_report() {
-    printf "\n${BOLD}${CYAN}======================================================================${NC}\n"
-    printf "${BOLD}${CYAN}  KUBE-TOOLS v%s — %s${NC}\n" "$VERSION" \
-        "$(msg "Environment & Toolchain Audit" "Diagnóstico do Ambiente e Ferramentas")"
-    printf "${BOLD}${CYAN}======================================================================${NC}\n"
+    printf "\n%b======================================================================%b\n" "${BOLD}${CYAN}" "${NC}"
+    printf "%b  KUBE-TOOLS v%s — %s%b\n" "${BOLD}${CYAN}" "$VERSION" \
+        "$(msg "Environment & Toolchain Audit" "Diagnóstico do Ambiente e Ferramentas")" "${NC}"
+    printf "%b======================================================================%b\n" "${BOLD}${CYAN}" "${NC}"
     printf "  ${BOLD}%-20s${NC} %s (%s)\n" "$(msg "Operating System:" "Sistema Operacional:")" "$OS" "$DISTRO"
     printf "  ${BOLD}%-20s${NC} %s (%s)\n" "$(msg "Architecture:" "Arquitetura:")" "$ARCH" "$ARCH_RAW"
     printf "  ${BOLD}%-20s${NC} %s\n"      "$(msg "Package Manager:" "Gerenciador Pacotes:")" "$PKG_MGR"
@@ -305,20 +305,20 @@ print_diagnostic_report() {
         printf "  ${BOLD}%-20s${NC} ${YELLOW}%s${NC}\n" "kubectl:" "$(msg "Not found in PATH" "Não encontrado no PATH")"
     fi
 
-    printf "${CYAN}----------------------------------------------------------------------${NC}\n"
+    printf "%b----------------------------------------------------------------------%b\n" "${CYAN}" "${NC}"
     printf "  ${BOLD}%s:${NC}\n\n" "$(msg "Current Toolchain Status" "Status atual das ferramentas no sistema")"
 
     for i in "${!TOOL_KEYS[@]}"; do
-        local key="${TOOL_KEYS[$i]}"
-        if [[ "${TOOL_INSTALLED[$i]}" -eq 1 ]]; then
+        local key="${TOOL_KEYS[i]}"
+        if [[ "${TOOL_INSTALLED[i]}" -eq 1 ]]; then
             printf "   ${GREEN}✔${NC} %-14s ${GREEN}%-16s${NC} %-12s ${DIM}(%s)${NC}\n" \
-                "$key" "$(msg "[Installed]" "[Já instalado]")" "${TOOL_VERSION[$i]}" "${TOOL_LOCATION[$i]}"
+                "$key" "$(msg "[Installed]" "[Já instalado]")" "${TOOL_VERSION[i]}" "${TOOL_LOCATION[i]}"
         else
             printf "   ${YELLOW}✗${NC} %-14s ${YELLOW}%-16s${NC}\n" \
                 "$key" "$(msg "[Not installed]" "[Não instalado]")"
         fi
     done
-    printf "${CYAN}======================================================================${NC}\n\n"
+    printf "%b======================================================================%b\n\n" "${CYAN}" "${NC}"
 }
 
 run_doctor() {
@@ -399,7 +399,8 @@ interactive_tool_selector() {
         printf "   ${BOLD}%s:${NC}\n" "$(msg "Form Controls" "Comandos do formulário")"
         printf "   • %s (ex: ${CYAN}1 3 5${NC})\n" \
             "$(msg "Type numbers to toggle individual tools" "Digite os números para marcar/desmarcar")"
-        printf "   • ${CYAN}a${NC} = $(msg "select all" "marcar todas") | ${CYAN}m${NC} = $(msg "missing only" "apenas ausentes") | ${CYAN}n${NC} = $(msg "none" "nenhuma")\n"
+        printf "   • ${CYAN}a${NC} = %s | ${CYAN}m${NC} = %s | ${CYAN}n${NC} = %s\n" \
+            "$(msg "select all" "marcar todas")" "$(msg "missing only" "apenas ausentes")" "$(msg "none" "nenhuma")"
         printf "   • %s ${GREEN}ENTER${NC} %s\n\n" \
             "$(msg "Press" "Pressione")" "$(msg "(blank) to continue" "(em branco) para avançar")"
 
@@ -409,15 +410,15 @@ interactive_tool_selector() {
         if [[ -z "$choice" ]]; then
             break
         elif [[ "$choice" == "a" || "$choice" == "A" ]]; then
-            for i in "${!TOOL_KEYS[@]}"; do TOOL_SELECTED[$i]=1; done
+            for i in "${!TOOL_KEYS[@]}"; do TOOL_SELECTED[i]=1; done
         elif [[ "$choice" == "n" || "$choice" == "N" ]]; then
-            for i in "${!TOOL_KEYS[@]}"; do TOOL_SELECTED[$i]=0; done
+            for i in "${!TOOL_KEYS[@]}"; do TOOL_SELECTED[i]=0; done
         elif [[ "$choice" == "m" || "$choice" == "M" ]]; then
             for i in "${!TOOL_KEYS[@]}"; do
-                if [[ "${TOOL_INSTALLED[$i]}" -eq 0 ]]; then
-                    TOOL_SELECTED[$i]=1
+                if [[ "${TOOL_INSTALLED[i]}" -eq 0 ]]; then
+                    TOOL_SELECTED[i]=1
                 else
-                    TOOL_SELECTED[$i]=0
+                    TOOL_SELECTED[i]=0
                 fi
             done
         else
@@ -425,10 +426,10 @@ interactive_tool_selector() {
             for token in $cleaned; do
                 if [[ "$token" =~ ^[1-6]$ ]]; then
                     local idx=$((token - 1))
-                    if [[ "${TOOL_SELECTED[$idx]}" -eq 1 ]]; then
-                        TOOL_SELECTED[$idx]=0
+                    if [[ "${TOOL_SELECTED[idx]}" -eq 1 ]]; then
+                        TOOL_SELECTED[idx]=0
                     else
-                        TOOL_SELECTED[$idx]=1
+                        TOOL_SELECTED[idx]=1
                     fi
                 else
                     log_warn "$(msg "Invalid option ignored" "Opção inválida ignorada"): $token"
@@ -440,7 +441,7 @@ interactive_tool_selector() {
 }
 
 interactive_alias_form() {
-    printf "\n${CYAN}----------------------------------------------------------------------${NC}\n"
+    printf "\n%b----------------------------------------------------------------------%b\n" "${CYAN}" "${NC}"
     printf "${BOLD}2) %s (${USER_SHELL}):${NC}\n\n" \
         "$(msg "Aliases & Prompt Configuration" "Configuração de Aliases e Prompt")"
 
@@ -503,15 +504,15 @@ interactive_alias_form() {
 }
 
 confirm_summary() {
-    printf "\n${BOLD}${CYAN}======================================================================${NC}\n"
-    printf "${BOLD}${CYAN}  %s${NC}\n" "$(msg "Installation Summary" "Resumo da Instalação")"
-    printf "${BOLD}${CYAN}======================================================================${NC}\n"
+    printf "\n%b======================================================================%b\n" "${BOLD}${CYAN}" "${NC}"
+    printf "%b  %s%b\n" "${BOLD}${CYAN}" "$(msg "Installation Summary" "Resumo da Instalação")" "${NC}"
+    printf "%b======================================================================%b\n" "${BOLD}${CYAN}" "${NC}"
 
     printf "  ${BOLD}%s:${NC}\n" "$(msg "Selected Tools" "Ferramentas selecionadas")"
     local any_tool=false
     for i in "${!TOOL_KEYS[@]}"; do
-        if [[ "${TOOL_SELECTED[$i]}" -eq 1 ]]; then
-            printf "   • %s\n" "${TOOL_KEYS[$i]}"
+        if [[ "${TOOL_SELECTED[i]}" -eq 1 ]]; then
+            printf "   • %s\n" "${TOOL_KEYS[i]}"
             any_tool=true
         fi
     done
@@ -535,7 +536,7 @@ confirm_summary() {
         ps1_state="$(msg "Disabled" "Desativado")"
     fi
     printf "\n  ${BOLD}Prompt kube-ps1:${NC} %s\n" "$ps1_state"
-    printf "${CYAN}======================================================================${NC}\n\n"
+    printf "%b======================================================================%b\n\n" "${CYAN}" "${NC}"
 
     local confirm=""
     read -r -p "$(msg "Confirm and apply changes? [Y/n]: " "Confirmar e aplicar configurações? [S/n]: ")" confirm || true
@@ -811,8 +812,10 @@ configure_posix_rc() {
     local prompt_line=""
     if [[ "$ENABLE_KUBE_PS1_PROMPT" == "true" ]]; then
         if [[ "$shell_type" == "bash" ]]; then
+            # shellcheck disable=SC2016
             prompt_line='if [[ "$PS1" != *"kube_ps1"* ]]; then PS1="\$(kube_ps1) $PS1"; fi'
         elif [[ "$shell_type" == "zsh" ]]; then
+            # shellcheck disable=SC2016
             prompt_line='if [[ "$PROMPT" != *"kube_ps1"* ]]; then PROMPT="\$(kube_ps1) $PROMPT"; fi'
         fi
     fi
