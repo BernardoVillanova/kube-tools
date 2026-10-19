@@ -198,8 +198,8 @@ assert_file_contains "$INSTALLER" 'git clone --depth 1 --branch "$KUBETAIL_PINNE
 assert_file_contains "$INSTALLER" 'git clone --depth 1 --branch "$KUBE_PS1_PINNED_TAG"' "kube-ps1 git clone pinned to release tag"
 
 # 7.3. Embedded SHA-256 Checksums must be declared
-assert_file_contains "$INSTALLER" "HELM_PINNED_SHA256" "Helm embedded SHA-256 integrity map present"
-assert_file_contains "$INSTALLER" "K9S_PINNED_SHA256" "k9s embedded SHA-256 integrity map present"
+assert_file_contains "$INSTALLER" "get_pinned_helm_sha256" "Helm embedded SHA-256 integrity lookup present"
+assert_file_contains "$INSTALLER" "get_pinned_k9s_sha256" "k9s embedded SHA-256 integrity lookup present"
 
 # 7.4. GitHub REST API rate-limit avoidance
 assert_file_not_contains "$INSTALLER" "api.github.com/rate_limit" "Network check does not consume GitHub API rate limits"

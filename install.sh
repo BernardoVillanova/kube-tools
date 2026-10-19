@@ -23,21 +23,29 @@ KUBE_PS1_PINNED_TAG="${KUBE_TOOLS_KUBE_PS1_VERSION:-v1.0.0}"
 HELM_PINNED_VERSION="${KUBE_TOOLS_HELM_VERSION:-v3.22.1}"
 K9S_PINNED_VERSION="${KUBE_TOOLS_K9S_VERSION:-v0.51.0}"
 
-# Pre-known SHA-256 digests for Helm (v3.22.1)
-declare -A HELM_PINNED_SHA256=(
-    ["linux-amd64"]="896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea"
-    ["linux-arm64"]="4c29e286b279d170fa048ddfc3e4e83dcd069ca9c52102766ba672d7149e694d"
-    ["darwin-amd64"]="cf850a81b908f8eef0331e6b18776da2767bcac639ca84472311dad20008495c"
-    ["darwin-arm64"]="e73da8a0b0d5193774fdff17ce6319c7436bb22ee229b45fd64f3c40368c753a"
-)
+# Pre-known SHA-256 digests for Helm (v3.22.1) - Portable across Bash 3.2+
+get_pinned_helm_sha256() {
+    local target="$1"
+    case "$target" in
+        linux-amd64)  printf "896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea" ;;
+        linux-arm64)  printf "4c29e286b279d170fa048ddfc3e4e83dcd069ca9c52102766ba672d7149e694d" ;;
+        darwin-amd64) printf "cf850a81b908f8eef0331e6b18776da2767bcac639ca84472311dad20008495c" ;;
+        darwin-arm64) printf "e73da8a0b0d5193774fdff17ce6319c7436bb22ee229b45fd64f3c40368c753a" ;;
+        *)            return 1 ;;
+    esac
+}
 
-# Pre-known SHA-256 digests for k9s (v0.51.0)
-declare -A K9S_PINNED_SHA256=(
-    ["Linux-amd64"]="c3752ad51a5a4015a113819c4eeb6e55a4d0e4b8e652494797532f6fc8161dd7"
-    ["Linux-arm64"]="3ee05c82e5f9198928a4e86133608ba6a2c10a2244d6a7789e820f78319d640c"
-    ["Darwin-amd64"]="7e8802c57c45a0cd389e8fc38472243fe4cf48d8ad5957e189ce370e19e5eda0"
-    ["Darwin-arm64"]="9b8c0e8f461e5d33aeee43a67f5ef4aff646a008a786887b8266cbb153c610cc"
-)
+# Pre-known SHA-256 digests for k9s (v0.51.0) - Portable across Bash 3.2+
+get_pinned_k9s_sha256() {
+    local target="$1"
+    case "$target" in
+        Linux-amd64)  printf "c3752ad51a5a4015a113819c4eeb6e55a4d0e4b8e652494797532f6fc8161dd7" ;;
+        Linux-arm64)  printf "3ee05c82e5f9198928a4e86133608ba6a2c10a2244d6a7789e820f78319d640c" ;;
+        Darwin-amd64) printf "7e8802c57c45a0cd389e8fc38472243fe4cf48d8ad5957e189ce370e19e5eda0" ;;
+        Darwin-arm64) printf "9b8c0e8f461e5d33aeee43a67f5ef4aff646a008a786887b8266cbb153c610cc" ;;
+        *)            return 1 ;;
+    esac
+}
 
 DRY_RUN=false
 UNINSTALL=false
@@ -798,7 +806,7 @@ install_helm() {
 
     local expected_sha="${KUBE_TOOLS_HELM_SHA256:-}"
     if [[ -z "$expected_sha" && "$helm_version" == "$HELM_PINNED_VERSION" ]]; then
-        expected_sha="${HELM_PINNED_SHA256["${OS}-${ARCH}"]:-}"
+        expected_sha="$(get_pinned_helm_sha256 "${OS}-${ARCH}" || echo "")"
     fi
 
     local tmp_dir
@@ -889,7 +897,7 @@ install_k9s() {
 
     local expected_sha="${KUBE_TOOLS_K9S_SHA256:-}"
     if [[ -z "$expected_sha" && "$k9s_version" == "$K9S_PINNED_VERSION" ]]; then
-        expected_sha="${K9S_PINNED_SHA256["${os_title}-${ARCH_K9S}"]:-}"
+        expected_sha="$(get_pinned_k9s_sha256 "${os_title}-${ARCH_K9S}" || echo "")"
     fi
 
     if [[ -z "$expected_sha" ]]; then
