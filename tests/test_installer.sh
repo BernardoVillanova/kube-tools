@@ -188,9 +188,13 @@ fi
 assert_file_not_contains "$INSTALLER" "get-helm-3" "Helm installer does not download/execute get-helm-3 remote script"
 
 # 7.2. Git clones must be pinned to tags/branches
+# shellcheck disable=SC2016
 assert_file_contains "$INSTALLER" 'git clone --depth 1 --branch "$FZF_PINNED_TAG"' "fzf git clone pinned to release tag"
+# shellcheck disable=SC2016
 assert_file_contains "$INSTALLER" 'git clone --depth 1 --branch "$KUBECTX_PINNED_TAG"' "kubectx git clone pinned to release tag"
+# shellcheck disable=SC2016
 assert_file_contains "$INSTALLER" 'git clone --depth 1 --branch "$KUBETAIL_PINNED_TAG"' "kubetail git clone pinned to release tag"
+# shellcheck disable=SC2016
 assert_file_contains "$INSTALLER" 'git clone --depth 1 --branch "$KUBE_PS1_PINNED_TAG"' "kube-ps1 git clone pinned to release tag"
 
 # 7.3. Embedded SHA-256 Checksums must be declared
