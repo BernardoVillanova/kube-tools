@@ -120,15 +120,14 @@ is_valid_alias_value() {
 
 escape_single_quotes_posix() {
     local str="$1"
-    # Safely escape ' as '\'' for POSIX single-quoted strings
-    printf "%s" "${str//\'/\'\\\'\'}"
+    # Safely escape ' as '\'' for POSIX single-quoted strings (portable across Bash 3.2 & 5+)
+    printf "%s" "$str" | sed "s/'/'\\\\''/g"
 }
 
 escape_single_quotes_fish() {
     local str="$1"
-    # Safely escape \ and ' for fish single-quoted strings
-    local escaped="${str//\\/\\\\}"
-    printf "%s" "${escaped//\'/\\\'}"
+    # Safely escape \ and ' for fish single-quoted strings (portable across Bash 3.2 & 5+)
+    printf "%s" "$str" | sed "s/\\\\/\\\\\\\\/g; s/'/\\\\'/g"
 }
 
 is_safe_managed_path() {
