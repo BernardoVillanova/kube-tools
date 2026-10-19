@@ -2,16 +2,18 @@
 
 `kube-tools` is designed to install Kubernetes CLI tooling safely without compromising workstation integrity.
 
-## 1. Binary & Source Verification (Fail-Closed)
+## 1. Binary & Source Verification (Supply-Chain Hardening & Fail-Closed)
 
-- **SHA-256 Checksum Validation**:
-  - **`k9s`**: Enforces HTTPS TLS 1.2+ (`--proto '=https' --tlsv1.2`), validates the release tag against strict semver (`^v[0-9]+\.[0-9]+\.[0-9]+`), downloads the official `checksums.txt` from `derailed/k9s` GitHub releases, and verifies the 64-character SHA-256 digest (`sha256sum`, `shasum -a 256`, or `openssl dgst -sha256`) before extracting. Verification is **fail-closed**: if `checksums.txt` is missing, malformed, or mismatches, installation aborts immediately and temporary files are purged.
-  - **`helm`**: Downloads the official Helm installer over TLS 1.2+ into an isolated `0700` temporary directory (`umask 077`), verifies non-empty payload, and executes with `VERIFY_CHECKSUM="true"` and `USE_SUDO="false"`, installing into user-space (`~/.local/bin`).
-- **Official Upstream Repositories Only**:
-  - `fzf`: `https://github.com/junegunn/fzf.git` (or verified OS package manager)
-  - `kubectx` / `kubens`: `https://github.com/ahmetb/kubectx.git`
-  - `kubetail`: `https://github.com/johanhaleby/kubetail.git`
-  - `kube-ps1`: `https://github.com/jonmosco/kube-ps1.git`
+- **Pinned Releases & Pre-Known SHA-256 Checksums**:
+  - **`helm`**: Eliminates the execution of unpinned remote scripts (preventing Codecov-style supply chain compromise). Downloads official precompiled binary archives (`helm-vX.Y.Z-<os>-<arch>.tar.gz`) from `https://get.helm.sh/` (fallback to GitHub releases) and validates against pre-known, embedded SHA-256 digests. Directly extracts the `helm` binary into user-space (`~/.local/bin`) without executing arbitrary shell scripts.
+  - **`k9s`**: Pinned to a verified stable release with embedded SHA-256 digests per OS/architecture in the script itself, preventing single-origin compromise of binary + checksums.txt.
+  - **Zero-Quota GitHub Release Resolution**: Uses HTTP 302 location redirects (`curl -fsSLI`) to resolve releases without consuming unauthenticated GitHub REST API rate limits (avoiding 403 Forbidden on shared CI/corporate networks).
+- **Official Upstream Repositories with Tag Pinning**:
+  - All Git dependencies (`fzf`, `kubectx`, `kubens`, `kubetail`, `kube-ps1`) are cloned using shallow clones strictly pinned to stable release tags (`--depth 1 --branch <tag>`), preventing unreviewed or malicious commits on the default branch (`main`/`master`) from executing on user workstations.
+  - `fzf`: `https://github.com/junegunn/fzf.git` (pinned tag `v0.74.5` or verified OS package manager)
+  - `kubectx` / `kubens`: `https://github.com/ahmetb/kubectx.git` (pinned tag `v0.9.5`)
+  - `kubetail`: `https://github.com/johanhaleby/kubetail.git` (pinned tag `1.6.22`)
+  - `kube-ps1`: `https://github.com/jonmosco/kube-ps1.git` (pinned tag `v1.0.0`)
 
 ## 2. Shell RC Injection Protection & Symlink Preservation
 

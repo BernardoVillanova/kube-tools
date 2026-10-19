@@ -8,12 +8,36 @@
 
 set -euo pipefail
 
-VERSION="1.3.0"
+VERSION="1.4.0"
 INSTALL_BIN_DIR="${HOME}/.local/bin"
 INSTALL_SHARE_DIR="${HOME}/.local/share/kube-tools"
 MANIFEST_FILE="${INSTALL_SHARE_DIR}/manifest.state"
 MARKER_BEGIN="# >>> kube-tools initialize >>>"
 MARKER_END="# <<< kube-tools initialize <<<"
+
+# Pinned Toolchain Versions & Tags (Supply-Chain Security Pinning)
+FZF_PINNED_TAG="${KUBE_TOOLS_FZF_VERSION:-v0.74.5}"
+KUBECTX_PINNED_TAG="${KUBE_TOOLS_KUBECTX_VERSION:-v0.9.5}"
+KUBETAIL_PINNED_TAG="${KUBE_TOOLS_KUBETAIL_VERSION:-1.6.22}"
+KUBE_PS1_PINNED_TAG="${KUBE_TOOLS_KUBE_PS1_VERSION:-v1.0.0}"
+HELM_PINNED_VERSION="${KUBE_TOOLS_HELM_VERSION:-v3.22.1}"
+K9S_PINNED_VERSION="${KUBE_TOOLS_K9S_VERSION:-v0.51.0}"
+
+# Pre-known SHA-256 digests for Helm (v3.22.1)
+declare -A HELM_PINNED_SHA256=(
+    ["linux-amd64"]="896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea"
+    ["linux-arm64"]="4c29e286b279d170fa048ddfc3e4e83dcd069ca9c52102766ba672d7149e694d"
+    ["darwin-amd64"]="cf850a81b908f8eef0331e6b18776da2767bcac639ca84472311dad20008495c"
+    ["darwin-arm64"]="e73da8a0b0d5193774fdff17ce6319c7436bb22ee229b45fd64f3c40368c753a"
+)
+
+# Pre-known SHA-256 digests for k9s (v0.51.0)
+declare -A K9S_PINNED_SHA256=(
+    ["Linux-amd64"]="c3752ad51a5a4015a113819c4eeb6e55a4d0e4b8e652494797532f6fc8161dd7"
+    ["Linux-arm64"]="3ee05c82e5f9198928a4e86133608ba6a2c10a2244d6a7789e820f78319d640c"
+    ["Darwin-amd64"]="7e8802c57c45a0cd389e8fc38472243fe4cf48d8ad5957e189ce370e19e5eda0"
+    ["Darwin-arm64"]="9b8c0e8f461e5d33aeee43a67f5ef4aff646a008a786887b8266cbb153c610cc"
+)
 
 DRY_RUN=false
 UNINSTALL=false
@@ -107,6 +131,26 @@ curl_secure() {
     curl --proto '=https' --tlsv1.2 -fsSL "$@"
 }
 
+get_github_latest_release_tag() {
+    local repo="$1"
+    local tag=""
+    # 1. Primary: HTTP 302 redirect location (zero REST API quota consumption)
+    tag="$(curl_secure -I -o /dev/null -w '%{url_effective}' "https://github.com/${repo}/releases/latest" 2>/dev/null | sed -E 's#.*/tag/##')"
+    if [[ "$tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9._-]+)?$ ]]; then
+        printf "%s\n" "$tag"
+        return 0
+    fi
+
+    # 2. Fallback: GitHub REST API if redirect resolution failed
+    tag="$(curl_secure "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')"
+    if [[ "$tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9._-]+)?$ ]]; then
+        printf "%s\n" "$tag"
+        return 0
+    fi
+
+    return 1
+}
+
 is_valid_alias_name() {
     local name="$1"
     [[ "$name" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]]
@@ -187,7 +231,9 @@ check_network_connectivity() {
     if ! command -v curl >/dev/null 2>&1; then
         return 0
     fi
-    if curl_secure --connect-timeout 5 https://api.github.com/rate_limit >/dev/null 2>&1; then
+    if curl_secure --connect-timeout 5 -I https://github.com >/dev/null 2>&1; then
+        return 0
+    elif curl_secure --connect-timeout 5 -I https://get.helm.sh >/dev/null 2>&1; then
         return 0
     else
         return 1
@@ -215,9 +261,7 @@ detect_environment() {
 
     DISTRO="unknown"
     if [[ "$OS" == "linux" && -f /etc/os-release ]]; then
-        # shellcheck disable=SC1091
-        . /etc/os-release
-        DISTRO="${ID:-unknown}"
+        DISTRO="$(awk -F= '$1=="ID" {gsub(/"/, "", $2); print $2}' /etc/os-release 2>/dev/null || echo "unknown")"
     elif [[ "$OS" == "darwin" ]]; then
         DISTRO="macos"
     fi
@@ -684,30 +728,32 @@ install_fzf() {
         return 0
     fi
 
-    log_info "$(msg "Falling back to git installer for fzf..." "Usando fallback via git para fzf...")"
+    log_info "$(msg "Falling back to git installer for fzf (pinned tag ${FZF_PINNED_TAG})..." "Usando fallback via git para fzf (tag fixada ${FZF_PINNED_TAG})...")"
     local fzf_dir="${INSTALL_SHARE_DIR}/fzf"
     if [[ -d "$fzf_dir/.git" ]]; then
-        run_cmd git -C "$fzf_dir" pull --ff-only
+        run_cmd git -C "$fzf_dir" fetch --depth 1 origin tag "$FZF_PINNED_TAG"
+        run_cmd git -C "$fzf_dir" -c advice.detachedHead=false checkout -q "$FZF_PINNED_TAG"
     else
         run_cmd rm -rf "$fzf_dir"
-        run_cmd git clone --depth 1 https://github.com/junegunn/fzf.git "$fzf_dir"
+        run_cmd git clone --depth 1 --branch "$FZF_PINNED_TAG" https://github.com/junegunn/fzf.git "$fzf_dir"
     fi
-    run_cmd "${fzf_dir}/install" --bin
+    run_cmd "${fzf_dir}/install" --bin --no-update-rc --no-completion --no-key-bindings
     run_cmd ln -sf "${fzf_dir}/bin/fzf" "${INSTALL_BIN_DIR}/fzf"
     [[ "$pre_installed" -eq 0 ]] && record_manifest "file:${INSTALL_BIN_DIR}/fzf"
     record_manifest "dir:${fzf_dir}"
-    log_ok "fzf -> ${INSTALL_BIN_DIR}/fzf"
+    log_ok "fzf (${FZF_PINNED_TAG}) -> ${INSTALL_BIN_DIR}/fzf"
 }
 
 install_kubectx_kubens() {
     local pre_installed="${TOOL_INSTALLED[1]}"
-    log_info "$(msg "Installing kubectx & kubens..." "Instalando kubectx e kubens...")"
+    log_info "$(msg "Installing kubectx & kubens (pinned tag ${KUBECTX_PINNED_TAG})..." "Instalando kubectx e kubens (tag fixada ${KUBECTX_PINNED_TAG})...")"
     local repo_dir="${INSTALL_SHARE_DIR}/kubectx"
     if [[ -d "$repo_dir/.git" ]]; then
-        run_cmd git -C "$repo_dir" pull --ff-only
+        run_cmd git -C "$repo_dir" fetch --depth 1 origin tag "$KUBECTX_PINNED_TAG"
+        run_cmd git -C "$repo_dir" -c advice.detachedHead=false checkout -q "$KUBECTX_PINNED_TAG"
     else
         run_cmd rm -rf "$repo_dir"
-        run_cmd git clone --depth 1 https://github.com/ahmetb/kubectx.git "$repo_dir"
+        run_cmd git clone --depth 1 --branch "$KUBECTX_PINNED_TAG" https://github.com/ahmetb/kubectx.git "$repo_dir"
     fi
     run_cmd ln -sf "${repo_dir}/kubectx" "${INSTALL_BIN_DIR}/kubectx"
     run_cmd ln -sf "${repo_dir}/kubens" "${INSTALL_BIN_DIR}/kubens"
@@ -716,7 +762,7 @@ install_kubectx_kubens() {
         record_manifest "file:${INSTALL_BIN_DIR}/kubens"
     fi
     record_manifest "dir:${repo_dir}"
-    log_ok "kubectx & kubens -> ${INSTALL_BIN_DIR}"
+    log_ok "kubectx & kubens (${KUBECTX_PINNED_TAG}) -> ${INSTALL_BIN_DIR}"
 }
 
 install_helm() {
@@ -730,24 +776,72 @@ install_helm() {
         fi
     fi
 
-    if [[ "$DRY_RUN" == "true" ]]; then
-        log_info "[DRY-RUN] $(msg "Would install helm with SHA-256 verification into" "Instalaria helm com verificação SHA-256 em") ${INSTALL_BIN_DIR}"
-    else
-        local tmp_dir
-        tmp_dir="$(umask 077 && mktemp -d)"
-        if ! curl_secure https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 -o "${tmp_dir}/get-helm-3" || [[ ! -s "${tmp_dir}/get-helm-3" ]]; then
-            rm -rf "$tmp_dir"
-            log_error "$(msg "Failed to download Helm installer script" "Falha ao baixar script instalador do Helm")"
-            return 1
+    local helm_version="$HELM_PINNED_VERSION"
+    if [[ -n "${KUBE_TOOLS_HELM_VERSION:-}" ]]; then
+        if [[ "$KUBE_TOOLS_HELM_VERSION" == "latest" ]]; then
+            helm_version="$(get_github_latest_release_tag "helm/helm" || echo "")"
+            if [[ ! "$helm_version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9._-]+)?$ ]]; then
+                log_error "$(msg "Could not resolve latest Helm release tag" "Não foi possível obter a última tag de release do Helm")"
+                return 1
+            fi
+        else
+            helm_version="$KUBE_TOOLS_HELM_VERSION"
         fi
-        if ! HELM_INSTALL_DIR="$INSTALL_BIN_DIR" USE_SUDO="false" VERIFY_CHECKSUM="true" bash "${tmp_dir}/get-helm-3"; then
-            rm -rf "$tmp_dir"
-            return 1
-        fi
-        rm -rf "$tmp_dir"
-        [[ "$pre_installed" -eq 0 ]] && record_manifest "file:${INSTALL_BIN_DIR}/helm"
-        log_ok "helm -> ${INSTALL_BIN_DIR}/helm"
     fi
+
+    local archive_name="helm-${helm_version}-${OS}-${ARCH}.tar.gz"
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_info "[DRY-RUN] $(msg "Would download & verify SHA-256 for" "Baixaria e verificaria SHA-256 de") ${archive_name} (${helm_version}) -> ${INSTALL_BIN_DIR}/helm"
+        return 0
+    fi
+
+    local expected_sha="${KUBE_TOOLS_HELM_SHA256:-}"
+    if [[ -z "$expected_sha" && "$helm_version" == "$HELM_PINNED_VERSION" ]]; then
+        expected_sha="${HELM_PINNED_SHA256["${OS}-${ARCH}"]:-}"
+    fi
+
+    local tmp_dir
+    tmp_dir="$(umask 077 && mktemp -d)"
+
+    local primary_url="https://get.helm.sh/${archive_name}"
+    local fallback_url="https://github.com/helm/helm/releases/download/${helm_version}/${archive_name}"
+
+    if ! curl_secure "$primary_url" -o "${tmp_dir}/${archive_name}" 2>/dev/null; then
+        log_info "$(msg "Retrying Helm download from GitHub releases..." "Tentando download do Helm via GitHub releases...")"
+        if ! curl_secure "$fallback_url" -o "${tmp_dir}/${archive_name}"; then
+            rm -rf "$tmp_dir"
+            log_error "$(msg "Failed to download Helm release archive" "Falha ao baixar pacote de release do Helm")"
+            return 1
+        fi
+    fi
+
+    if [[ -z "$expected_sha" ]]; then
+        log_warn "$(msg "Using remote sha256sum for unpinned Helm version" "Usando sha256sum remoto para versão não fixada do Helm")"
+        if ! curl_secure "https://get.helm.sh/${archive_name}.sha256sum" -o "${tmp_dir}/helm.sha256" 2>/dev/null && \
+           ! curl_secure "${fallback_url}.sha256sum" -o "${tmp_dir}/helm.sha256" 2>/dev/null; then
+            rm -rf "$tmp_dir"
+            log_error "$(msg "Failed to obtain SHA-256 checksum for Helm" "Falha ao obter checksum SHA-256 do Helm")"
+            return 1
+        fi
+        expected_sha="$(awk '{print $1}' "${tmp_dir}/helm.sha256" | head -n1)"
+    fi
+
+    if ! verify_sha256 "${tmp_dir}/${archive_name}" "$expected_sha"; then
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    if ! tar -xzf "${tmp_dir}/${archive_name}" -C "$tmp_dir" "${OS}-${ARCH}/helm" || \
+       ! install -m 0755 "${tmp_dir}/${OS}-${ARCH}/helm" "${INSTALL_BIN_DIR}/helm"; then
+        rm -rf "$tmp_dir"
+        log_error "$(msg "Failed to extract or install Helm binary" "Falha ao extrair ou instalar binário do Helm")"
+        return 1
+    fi
+
+    rm -rf "$tmp_dir"
+    [[ "$pre_installed" -eq 0 ]] && record_manifest "file:${INSTALL_BIN_DIR}/helm"
+    log_ok "helm (${helm_version}) -> ${INSTALL_BIN_DIR}/helm"
 }
 
 install_k9s() {
@@ -765,31 +859,50 @@ install_k9s() {
     [[ "$OS" == "linux" ]] && os_title="Linux" || os_title="Darwin"
     local archive_name="k9s_${os_title}_${ARCH_K9S}.tar.gz"
 
+    local k9s_version="$K9S_PINNED_VERSION"
+    if [[ -n "${KUBE_TOOLS_K9S_VERSION:-}" ]]; then
+        if [[ "$KUBE_TOOLS_K9S_VERSION" == "latest" ]]; then
+            k9s_version="$(get_github_latest_release_tag "derailed/k9s" || echo "")"
+            if [[ ! "$k9s_version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9._-]+)?$ ]]; then
+                log_error "$(msg "Could not resolve latest k9s release tag" "Não foi possível obter a última tag de release do k9s")"
+                return 1
+            fi
+        else
+            k9s_version="$KUBE_TOOLS_K9S_VERSION"
+        fi
+    fi
+
     if [[ "$DRY_RUN" == "true" ]]; then
-        log_info "[DRY-RUN] $(msg "Would download & verify SHA-256 for" "Baixaria e verificaria SHA-256 de") ${archive_name} -> ${INSTALL_BIN_DIR}/k9s"
+        log_info "[DRY-RUN] $(msg "Would download & verify SHA-256 for" "Baixaria e verificaria SHA-256 de") ${archive_name} (${k9s_version}) -> ${INSTALL_BIN_DIR}/k9s"
         return 0
     fi
 
-    local latest_tag
-    latest_tag="$(curl_secure https://api.github.com/repos/derailed/k9s/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')"
-    if [[ ! "$latest_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9._-]+)?$ ]]; then
-        log_error "$(msg "Invalid or empty k9s release tag from GitHub API" "Tag de release do k9s inválida ou vazia"): ${latest_tag:-<empty>}"
-        return 1
-    fi
-
-    local base_url="https://github.com/derailed/k9s/releases/download/${latest_tag}"
+    local base_url="https://github.com/derailed/k9s/releases/download/${k9s_version}"
     local tmp_dir
     tmp_dir="$(umask 077 && mktemp -d)"
 
-    if ! curl_secure "${base_url}/${archive_name}" -o "${tmp_dir}/${archive_name}" || \
-       ! curl_secure "${base_url}/checksums.txt" -o "${tmp_dir}/checksums.txt"; then
+    if ! curl_secure "${base_url}/${archive_name}" -o "${tmp_dir}/${archive_name}"; then
         rm -rf "$tmp_dir"
-        log_error "$(msg "Failed to download k9s release or checksums.txt" "Falha ao baixar release ou checksums.txt do k9s")"
+        log_error "$(msg "Failed to download k9s release archive" "Falha ao baixar pacote de release do k9s")"
         return 1
     fi
 
-    local expected_sha
-    expected_sha="$(awk -v f="$archive_name" '$2 == f {print $1}' "${tmp_dir}/checksums.txt" | head -n1)"
+    local expected_sha="${KUBE_TOOLS_K9S_SHA256:-}"
+    if [[ -z "$expected_sha" && "$k9s_version" == "$K9S_PINNED_VERSION" ]]; then
+        expected_sha="${K9S_PINNED_SHA256["${os_title}-${ARCH_K9S}"]:-}"
+    fi
+
+    if [[ -z "$expected_sha" ]]; then
+        log_warn "$(msg "Using release checksums file for unpinned k9s version" "Usando arquivo de checksum da release para versão não fixada do k9s")"
+        if ! curl_secure "${base_url}/checksums.sha256" -o "${tmp_dir}/checksums.txt" 2>/dev/null && \
+           ! curl_secure "${base_url}/checksums.txt" -o "${tmp_dir}/checksums.txt" 2>/dev/null; then
+            rm -rf "$tmp_dir"
+            log_error "$(msg "Failed to download k9s checksums file" "Falha ao baixar arquivo de checksums do k9s")"
+            return 1
+        fi
+        expected_sha="$(awk -v f="$archive_name" '$2 == f {print $1}' "${tmp_dir}/checksums.txt" | head -n1)"
+    fi
+
     if ! verify_sha256 "${tmp_dir}/${archive_name}" "$expected_sha"; then
         rm -rf "$tmp_dir"
         return 1
@@ -798,42 +911,45 @@ install_k9s() {
     if ! tar -xzf "${tmp_dir}/${archive_name}" -C "$tmp_dir" k9s || \
        ! install -m 0755 "${tmp_dir}/k9s" "${INSTALL_BIN_DIR}/k9s"; then
         rm -rf "$tmp_dir"
+        log_error "$(msg "Failed to extract or install k9s binary" "Falha ao extrair ou instalar binário do k9s")"
         return 1
     fi
 
     rm -rf "$tmp_dir"
     [[ "$pre_installed" -eq 0 ]] && record_manifest "file:${INSTALL_BIN_DIR}/k9s"
-    log_ok "k9s (${latest_tag}) -> ${INSTALL_BIN_DIR}/k9s"
+    log_ok "k9s (${k9s_version}) -> ${INSTALL_BIN_DIR}/k9s"
 }
 
 install_kubetail() {
     local pre_installed="${TOOL_INSTALLED[4]}"
-    log_info "$(msg "Installing kubetail..." "Instalando kubetail...")"
+    log_info "$(msg "Installing kubetail (pinned tag ${KUBETAIL_PINNED_TAG})..." "Instalando kubetail (tag fixada ${KUBETAIL_PINNED_TAG})...")"
     local repo_dir="${INSTALL_SHARE_DIR}/kubetail"
     if [[ -d "$repo_dir/.git" ]]; then
-        run_cmd git -C "$repo_dir" pull --ff-only
+        run_cmd git -C "$repo_dir" fetch --depth 1 origin tag "$KUBETAIL_PINNED_TAG"
+        run_cmd git -C "$repo_dir" -c advice.detachedHead=false checkout -q "$KUBETAIL_PINNED_TAG"
     else
         run_cmd rm -rf "$repo_dir"
-        run_cmd git clone --depth 1 https://github.com/johanhaleby/kubetail.git "$repo_dir"
+        run_cmd git clone --depth 1 --branch "$KUBETAIL_PINNED_TAG" https://github.com/johanhaleby/kubetail.git "$repo_dir"
     fi
     run_cmd ln -sf "${repo_dir}/kubetail" "${INSTALL_BIN_DIR}/kubetail"
     [[ "$pre_installed" -eq 0 ]] && record_manifest "file:${INSTALL_BIN_DIR}/kubetail"
     record_manifest "dir:${repo_dir}"
-    log_ok "kubetail -> ${INSTALL_BIN_DIR}/kubetail"
+    log_ok "kubetail (${KUBETAIL_PINNED_TAG}) -> ${INSTALL_BIN_DIR}/kubetail"
 }
 
 install_kube_ps1() {
     local pre_installed="${TOOL_INSTALLED[5]}"
-    log_info "$(msg "Installing kube-ps1..." "Instalando kube-ps1...")"
+    log_info "$(msg "Installing kube-ps1 (pinned tag ${KUBE_PS1_PINNED_TAG})..." "Instalando kube-ps1 (tag fixada ${KUBE_PS1_PINNED_TAG})...")"
     local repo_dir="${INSTALL_SHARE_DIR}/kube-ps1"
     if [[ -d "$repo_dir/.git" ]]; then
-        run_cmd git -C "$repo_dir" pull --ff-only
+        run_cmd git -C "$repo_dir" fetch --depth 1 origin tag "$KUBE_PS1_PINNED_TAG"
+        run_cmd git -C "$repo_dir" -c advice.detachedHead=false checkout -q "$KUBE_PS1_PINNED_TAG"
     else
         run_cmd rm -rf "$repo_dir"
-        run_cmd git clone --depth 1 https://github.com/jonmosco/kube-ps1.git "$repo_dir"
+        run_cmd git clone --depth 1 --branch "$KUBE_PS1_PINNED_TAG" https://github.com/jonmosco/kube-ps1.git "$repo_dir"
     fi
     [[ "$pre_installed" -eq 0 ]] && record_manifest "dir:${repo_dir}"
-    log_ok "kube-ps1 -> ${repo_dir}"
+    log_ok "kube-ps1 (${KUBE_PS1_PINNED_TAG}) -> ${repo_dir}"
 }
 
 run_selected_installers() {

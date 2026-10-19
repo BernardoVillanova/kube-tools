@@ -36,12 +36,12 @@ Setting up a new workstation or DevOps jumpbox usually requires visiting 6+ repo
 
 | Tool | Upstream | Description | Verification Method |
 | :--- | :--- | :--- | :--- |
-| **[fzf](https://github.com/junegunn/fzf)** | `junegunn/fzf` | Interactive fuzzy finder for `kubectx` & `kubens` | System Package Mgr / Shallow Git Clone |
-| **[kubectx & kubens](https://github.com/ahmetb/kubectx)** | `ahmetb/kubectx` | Fast switching between Kubernetes contexts and namespaces | Official Git Repo |
-| **[helm](https://helm.sh/)** | `helm/helm` | The Kubernetes Package Manager | SHA-256 Checksum (`VERIFY_CHECKSUM=true`) |
-| **[k9s](https://k9scli.io/)** | `derailed/k9s` | Terminal UI to observe and manage Kubernetes clusters | Official `checksums.txt` SHA-256 verification |
-| **[kubetail](https://github.com/johanhaleby/kubetail)** | `johanhaleby/kubetail` | Aggregate logs from multiple pods simultaneously | Official Git Repo |
-| **[kube-ps1](https://github.com/jonmosco/kube-ps1)** | `jonmosco/kube-ps1` | Display current K8s context & namespace on shell prompt | Official Git Repo |
+| **[fzf](https://github.com/junegunn/fzf)** | `junegunn/fzf` | Interactive fuzzy finder for `kubectx` & `kubens` | System Package Mgr / Pinned Release Tag (`v0.74.5`) |
+| **[kubectx & kubens](https://github.com/ahmetb/kubectx)** | `ahmetb/kubectx` | Fast switching between Kubernetes contexts and namespaces | Pinned Release Tag (`v0.9.5`) |
+| **[helm](https://helm.sh/)** | `helm/helm` | The Kubernetes Package Manager | Official precompiled binary + Embedded SHA-256 (`v3.22.1`) |
+| **[k9s](https://k9scli.io/)** | `derailed/k9s` | Terminal UI to observe and manage Kubernetes clusters | Pinned Release (`v0.51.0`) + Embedded SHA-256 + Zero-Quota Redirect |
+| **[kubetail](https://github.com/johanhaleby/kubetail)** | `johanhaleby/kubetail` | Aggregate logs from multiple pods simultaneously | Pinned Release Tag (`1.6.22`) |
+| **[kube-ps1](https://github.com/jonmosco/kube-ps1)** | `jonmosco/kube-ps1` | Display current K8s context & namespace on shell prompt | Pinned Release Tag (`v1.0.0`) |
 
 ---
 

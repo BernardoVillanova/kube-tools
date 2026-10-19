@@ -36,12 +36,12 @@ O `kube-tools` centraliza todo esse processo em um único script auditável ([`i
 
 | Ferramenta | Repositório Oficial | Descrição | Método de Verificação |
 | :--- | :--- | :--- | :--- |
-| **[fzf](https://github.com/junegunn/fzf)** | `junegunn/fzf` | Busca interativa fuzzy para `kubectx` e `kubens` | Gerenciador de Pacotes / Clone Git Oficial |
-| **[kubectx & kubens](https://github.com/ahmetb/kubectx)** | `ahmetb/kubectx` | Alternância rápida entre contextos e namespaces K8s | Repositório Git Oficial |
-| **[helm](https://helm.sh/)** | `helm/helm` | Gerenciador de pacotes para Kubernetes | Checksum SHA-256 (`VERIFY_CHECKSUM=true`) |
-| **[k9s](https://k9scli.io/)** | `derailed/k9s` | Terminal UI para observabilidade e gestão de clusters | Verificação SHA-256 via `checksums.txt` oficial |
-| **[kubetail](https://github.com/johanhaleby/kubetail)** | `johanhaleby/kubetail` | Agregador de logs de múltiplos pods simultaneamente | Repositório Git Oficial |
-| **[kube-ps1](https://github.com/jonmosco/kube-ps1)** | `jonmosco/kube-ps1` | Exibe contexto e namespace atual no prompt do shell | Repositório Git Oficial |
+| **[fzf](https://github.com/junegunn/fzf)** | `junegunn/fzf` | Busca interativa fuzzy para `kubectx` e `kubens` | Gerenciador de Pacotes / Tag Fixada Estável (`v0.74.5`) |
+| **[kubectx & kubens](https://github.com/ahmetb/kubectx)** | `ahmetb/kubectx` | Alternância rápida entre contextos e namespaces K8s | Tag Fixada Estável (`v0.9.5`) |
+| **[helm](https://helm.sh/)** | `helm/helm` | Gerenciador de pacotes para Kubernetes | Binário oficial pré-compilado + SHA-256 embutido (`v3.22.1`) |
+| **[k9s](https://k9scli.io/)** | `derailed/k9s` | Terminal UI para observabilidade e gestão de clusters | Release Fixada (`v0.51.0`) + SHA-256 embutido + Redirect sem cota API |
+| **[kubetail](https://github.com/johanhaleby/kubetail)** | `johanhaleby/kubetail` | Agregador de logs de múltiplos pods simultaneamente | Tag Fixada Estável (`1.6.22`) |
+| **[kube-ps1](https://github.com/jonmosco/kube-ps1)** | `jonmosco/kube-ps1` | Exibe contexto e namespace atual no prompt do shell | Tag Fixada Estável (`v1.0.0`) |
 
 ---
 
