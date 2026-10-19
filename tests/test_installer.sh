@@ -115,14 +115,44 @@ assert_contains "$marker_count" "1" "Idempotent RC block update (single block in
 assert_file_not_contains "${SANDBOX_HOME}/.bashrc" "mykctx" "Old custom alias cleanly replaced on re-run"
 assert_file_contains "${SANDBOX_HOME}/.bashrc" "alias kctx='kubectx'" "New default alias present after re-run"
 
-# Test uninstall / rollback preserves pre-existing tools and only deletes manifest-tracked items
+# 5. Security Regression Tests: Alias Injection, Quote Escaping, Symlink Preservation & Path Confinement
+# Make .bashrc a symlink to a dotfiles directory (like GNU Stow / Chezmoi)
+mkdir -p "${SANDBOX_HOME}/dotfiles"
+mv "${SANDBOX_HOME}/.bashrc" "${SANDBOX_HOME}/dotfiles/bashrc"
+ln -s "${SANDBOX_HOME}/dotfiles/bashrc" "${SANDBOX_HOME}/.bashrc"
+
+# Attempt to inject a malicious alias name ('bad;echo_pwned') and a valid alias with single quotes
+printf "n\n\nbad;echo_pwned\nkns\n\n\nevil;id=whoami\nkjson=kubectl get pods -o jsonpath='{.items}'\n\nY\nY\n" | \
+    HOME="$SANDBOX_HOME" SHELL="/bin/bash" "$INSTALLER" --lang en >/dev/null
+
+assert_file_not_contains "${SANDBOX_HOME}/.bashrc" "bad;echo_pwned" "Rejects command injection in kubectx alias name"
+assert_file_not_contains "${SANDBOX_HOME}/.bashrc" "evil;id" "Rejects command injection in custom alias name"
+assert_file_contains "${SANDBOX_HOME}/.bashrc" "alias kjson='kubectl get pods -o jsonpath='\\''{.items}'\\'''" "Escapes single quotes safely in POSIX alias value"
+assert_file_contains "${SANDBOX_HOME}/.config/fish/config.fish" "alias kjson 'kubectl get pods -o jsonpath=\\'{.items}\\''" "Escapes single quotes safely in Fish alias value"
+
+if [[ -L "${SANDBOX_HOME}/.bashrc" ]]; then
+    printf "  \033[0;32m✔ PASS:\033[0m Preserves .bashrc symlink (Stow/Chezmoi dotfiles compatibility)\n"
+    PASS=$((PASS + 1))
+else
+    printf "  \033[0;31m✘ FAIL:\033[0m .bashrc symlink was clobbered!\n"
+    FAIL=$((FAIL + 1))
+fi
+
+# 6. Test uninstall / rollback preserves pre-existing tools and blocks manifest path traversal
 mkdir -p "${SANDBOX_HOME}/.local/bin" "${SANDBOX_HOME}/.local/share/kube-tools"
 printf "#!/bin/sh\necho 'pre-existing fzf'\n" > "${SANDBOX_HOME}/.local/bin/fzf"
 chmod +x "${SANDBOX_HOME}/.local/bin/fzf"
+printf "sensitive data\n" > "${SANDBOX_HOME}/outside_secret.txt"
 
-# Simulate a binary that WAS installed and tracked by kube-tools
+# Simulate a binary that WAS installed and tracked by kube-tools + malicious manifest entries
 printf "#!/bin/sh\necho 'managed kubectx'\n" > "${SANDBOX_HOME}/.local/bin/kubectx"
-printf "file:%s/.local/bin/kubectx\n" "$SANDBOX_HOME" > "${SANDBOX_HOME}/.local/share/kube-tools/manifest.state"
+cat <<EOF > "${SANDBOX_HOME}/.local/share/kube-tools/manifest.state"
+file:${SANDBOX_HOME}/.local/bin/kubectx
+file:${SANDBOX_HOME}/.local/bin/../../outside_secret.txt
+dir:${SANDBOX_HOME}
+dir:/
+pkg:apt:openssh-server
+EOF
 
 HOME="$SANDBOX_HOME" SHELL="/bin/bash" "$INSTALLER" --uninstall --lang en >/dev/null
 assert_file_not_contains "${SANDBOX_HOME}/.bashrc" "kube-tools initialize" "Rollback removes block from .bashrc"
@@ -134,6 +164,14 @@ if [[ -f "${SANDBOX_HOME}/.local/bin/fzf" ]]; then
     PASS=$((PASS + 1))
 else
     printf "  \033[0;31m✘ FAIL:\033[0m Pre-existing fzf binary was deleted by --uninstall!\n"
+    FAIL=$((FAIL + 1))
+fi
+
+if [[ -f "${SANDBOX_HOME}/outside_secret.txt" ]]; then
+    printf "  \033[0;32m✔ PASS:\033[0m Manifest path-confinement blocked '../../outside_secret.txt' deletion\n"
+    PASS=$((PASS + 1))
+else
+    printf "  \033[0;31m✘ FAIL:\033[0m Manifest path traversal deleted file outside .local/bin!\n"
     FAIL=$((FAIL + 1))
 fi
 

@@ -101,8 +101,48 @@ run_cmd() {
 }
 
 # ------------------------------------------------------------------------------
-# 1. Security & Integrity Verification Helpers (SHA-256 + Network Pre-flight)
+# 1. Security & Integrity Verification Helpers (SHA-256, Input & Path Guards)
 # ------------------------------------------------------------------------------
+curl_secure() {
+    curl --proto '=https' --tlsv1.2 -fsSL "$@"
+}
+
+is_valid_alias_name() {
+    local name="$1"
+    [[ "$name" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]]
+}
+
+is_valid_alias_value() {
+    local val="$1"
+    # Reject empty values, newlines, or carriage returns
+    [[ -n "$val" && "$val" != *$'\n'* && "$val" != *$'\r'* ]]
+}
+
+escape_single_quotes_posix() {
+    local str="$1"
+    # Safely escape ' as '\'' for POSIX single-quoted strings
+    printf "%s" "${str//\'/\'\\\'\'}"
+}
+
+escape_single_quotes_fish() {
+    local str="$1"
+    # Safely escape \ and ' for fish single-quoted strings
+    local escaped="${str//\\/\\\\}"
+    printf "%s" "${escaped//\'/\\\'}"
+}
+
+is_safe_managed_path() {
+    local target="$1"
+    local base_dir="$2"
+    # Reject empty, relative, or parent-traversal paths
+    [[ -n "$target" && -n "$base_dir" ]] || return 1
+    [[ "$target" == /* ]] || return 1
+    [[ "$target" != *"/../"* && "$target" != *"/.." ]] || return 1
+    # Must be strictly inside base_dir (not equal to base_dir or /)
+    [[ "$target" == "${base_dir}/"* && "$target" != "${base_dir}/" ]] || return 1
+    return 0
+}
+
 compute_sha256() {
     local file="$1"
     if command -v sha256sum >/dev/null 2>&1; then
@@ -120,23 +160,35 @@ compute_sha256() {
 verify_sha256() {
     local file="$1"
     local expected_hash="$2"
+
+    # Fail-closed if expected_hash is missing or not a valid 64-hex SHA-256 digest
+    if [[ ! "$expected_hash" =~ ^[a-fA-F0-9]{64}$ ]]; then
+        log_error "$(msg "Invalid or empty expected SHA-256 digest for" "Hash SHA-256 esperado inválido ou vazio para") $(basename "$file")"
+        return 1
+    fi
+
     local actual_hash
     actual_hash="$(compute_sha256 "$file")"
 
-    if [[ "$actual_hash" != "$expected_hash" ]]; then
+    # Case-insensitive comparison via tr
+    local norm_expected norm_actual
+    norm_expected="$(printf "%s" "$expected_hash" | tr '[:upper:]' '[:lower:]')"
+    norm_actual="$(printf "%s" "$actual_hash" | tr '[:upper:]' '[:lower:]')"
+
+    if [[ "$norm_actual" != "$norm_expected" ]]; then
         log_error "$(msg "SHA-256 checksum mismatch for" "Falha na verificação SHA-256 de") $(basename "$file")!"
-        log_error "  Expected: ${expected_hash}"
-        log_error "  Actual:   ${actual_hash}"
+        log_error "  Expected: ${norm_expected}"
+        log_error "  Actual:   ${norm_actual}"
         return 1
     fi
-    log_ok "$(msg "SHA-256 checksum verified" "Checksum SHA-256 verificado"): ${actual_hash:0:16}..."
+    log_ok "$(msg "SHA-256 checksum verified" "Checksum SHA-256 verificado"): ${norm_actual:0:16}..."
 }
 
 check_network_connectivity() {
     if ! command -v curl >/dev/null 2>&1; then
         return 0
     fi
-    if curl -fsSL --connect-timeout 5 https://api.github.com/rate_limit >/dev/null 2>&1; then
+    if curl_secure --connect-timeout 5 https://api.github.com/rate_limit >/dev/null 2>&1; then
         return 0
     else
         return 1
@@ -451,7 +503,11 @@ interactive_alias_form() {
     if [[ "$input_kctx" == "-" ]]; then
         ALIAS_KUBECTX=""
     elif [[ -n "$input_kctx" ]]; then
-        ALIAS_KUBECTX="$input_kctx"
+        if is_valid_alias_name "$input_kctx"; then
+            ALIAS_KUBECTX="$input_kctx"
+        else
+            log_warn "$(msg "Invalid alias name ignored (use letters, digits, _, -)" "Nome de alias inválido ignorado (use letras, números, _, -)")"
+        fi
     fi
 
     # kubens alias
@@ -460,21 +516,33 @@ interactive_alias_form() {
     if [[ "$input_kns" == "-" ]]; then
         ALIAS_KUBENS=""
     elif [[ -n "$input_kns" ]]; then
-        ALIAS_KUBENS="$input_kns"
+        if is_valid_alias_name "$input_kns"; then
+            ALIAS_KUBENS="$input_kns"
+        else
+            log_warn "$(msg "Invalid alias name ignored (use letters, digits, _, -)" "Nome de alias inválido ignorado (use letras, números, _, -)")"
+        fi
     fi
 
     # Optional alias for kubectl
     local input_k=""
     read -r -p "   $(msg "Create alias for 'kubectl'? (e.g. k) [ENTER to skip]: " "Deseja criar alias para 'kubectl'? (ex: k) [ENTER p/ pular]: ")" input_k || true
     if [[ -n "$input_k" && "$input_k" != "-" ]]; then
-        ALIAS_KUBECTL="$input_k"
+        if is_valid_alias_name "$input_k"; then
+            ALIAS_KUBECTL="$input_k"
+        else
+            log_warn "$(msg "Invalid alias name ignored" "Nome de alias inválido ignorado"): $input_k"
+        fi
     fi
 
     # Optional alias for kubetail
     local input_kt=""
     read -r -p "   $(msg "Create alias for 'kubetail'? (e.g. kt) [ENTER to skip]: " "Deseja criar alias para 'kubetail'? (ex: kt) [ENTER p/ pular]: ")" input_kt || true
     if [[ -n "$input_kt" && "$input_kt" != "-" ]]; then
-        ALIAS_KUBETAIL="$input_kt"
+        if is_valid_alias_name "$input_kt"; then
+            ALIAS_KUBETAIL="$input_kt"
+        else
+            log_warn "$(msg "Invalid alias name ignored" "Nome de alias inválido ignorado"): $input_kt"
+        fi
     fi
 
     # Custom user aliases loop
@@ -485,8 +553,14 @@ interactive_alias_form() {
         read -r -p "   $(msg "New alias [ENTER to finish]: " "Novo alias [ENTER p/ concluir]: ")" custom_alias || break
         [[ -z "$custom_alias" ]] && break
         if [[ "$custom_alias" == *"="* ]]; then
-            EXTRA_ALIASES+=("$custom_alias")
-            log_ok "$(msg "Alias added" "Alias adicionado"): $custom_alias"
+            local k="${custom_alias%%=*}"
+            local v="${custom_alias#*=}"
+            if is_valid_alias_name "$k" && is_valid_alias_value "$v"; then
+                EXTRA_ALIASES+=("${k}=${v}")
+                log_ok "$(msg "Alias added" "Alias adicionado"): ${k}=${v}"
+            else
+                log_warn "$(msg "Invalid alias name or command rejected" "Nome de alias ou comando inválido rejeitado"): $custom_alias"
+            fi
         else
             log_warn "$(msg "Invalid format. Use name=command (e.g. kgp=kubectl get pods)" "Formato inválido. Use nome=comando (ex: kgp=kubectl get pods)")"
         fi
@@ -660,8 +734,18 @@ install_helm() {
     if [[ "$DRY_RUN" == "true" ]]; then
         log_info "[DRY-RUN] $(msg "Would install helm with SHA-256 verification into" "Instalaria helm com verificação SHA-256 em") ${INSTALL_BIN_DIR}"
     else
-        curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | \
-            HELM_INSTALL_DIR="$INSTALL_BIN_DIR" USE_SUDO="false" VERIFY_CHECKSUM="true" bash
+        local tmp_dir
+        tmp_dir="$(umask 077 && mktemp -d)"
+        if ! curl_secure https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 -o "${tmp_dir}/get-helm-3" || [[ ! -s "${tmp_dir}/get-helm-3" ]]; then
+            rm -rf "$tmp_dir"
+            log_error "$(msg "Failed to download Helm installer script" "Falha ao baixar script instalador do Helm")"
+            return 1
+        fi
+        if ! HELM_INSTALL_DIR="$INSTALL_BIN_DIR" USE_SUDO="false" VERIFY_CHECKSUM="true" bash "${tmp_dir}/get-helm-3"; then
+            rm -rf "$tmp_dir"
+            return 1
+        fi
+        rm -rf "$tmp_dir"
         [[ "$pre_installed" -eq 0 ]] && record_manifest "file:${INSTALL_BIN_DIR}/helm"
         log_ok "helm -> ${INSTALL_BIN_DIR}/helm"
     fi
@@ -688,29 +772,36 @@ install_k9s() {
     fi
 
     local latest_tag
-    latest_tag="$(curl -fsSL https://api.github.com/repos/derailed/k9s/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')"
-    if [[ -z "$latest_tag" ]]; then
-        log_error "$(msg "Failed to fetch latest k9s release tag" "Falha ao obter a versão mais recente do k9s")"
+    latest_tag="$(curl_secure https://api.github.com/repos/derailed/k9s/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')"
+    if [[ ! "$latest_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9._-]+)?$ ]]; then
+        log_error "$(msg "Invalid or empty k9s release tag from GitHub API" "Tag de release do k9s inválida ou vazia"): ${latest_tag:-<empty>}"
         return 1
     fi
 
     local base_url="https://github.com/derailed/k9s/releases/download/${latest_tag}"
     local tmp_dir
-    tmp_dir="$(mktemp -d)"
+    tmp_dir="$(umask 077 && mktemp -d)"
 
-    curl -fsSL "${base_url}/${archive_name}" -o "${tmp_dir}/${archive_name}"
-    curl -fsSL "${base_url}/checksums.txt" -o "${tmp_dir}/checksums.txt"
+    if ! curl_secure "${base_url}/${archive_name}" -o "${tmp_dir}/${archive_name}" || \
+       ! curl_secure "${base_url}/checksums.txt" -o "${tmp_dir}/checksums.txt"; then
+        rm -rf "$tmp_dir"
+        log_error "$(msg "Failed to download k9s release or checksums.txt" "Falha ao baixar release ou checksums.txt do k9s")"
+        return 1
+    fi
 
     local expected_sha
     expected_sha="$(awk -v f="$archive_name" '$2 == f {print $1}' "${tmp_dir}/checksums.txt" | head -n1)"
-    if [[ -n "$expected_sha" ]]; then
-        verify_sha256 "${tmp_dir}/${archive_name}" "$expected_sha"
-    else
-        log_warn "$(msg "Checksum entry not found for" "Entrada de checksum não encontrada para") ${archive_name}"
+    if ! verify_sha256 "${tmp_dir}/${archive_name}" "$expected_sha"; then
+        rm -rf "$tmp_dir"
+        return 1
     fi
 
-    tar -xzf "${tmp_dir}/${archive_name}" -C "$tmp_dir" k9s
-    install -m 0755 "${tmp_dir}/k9s" "${INSTALL_BIN_DIR}/k9s"
+    if ! tar -xzf "${tmp_dir}/${archive_name}" -C "$tmp_dir" k9s || \
+       ! install -m 0755 "${tmp_dir}/k9s" "${INSTALL_BIN_DIR}/k9s"; then
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
     rm -rf "$tmp_dir"
     [[ "$pre_installed" -eq 0 ]] && record_manifest "file:${INSTALL_BIN_DIR}/k9s"
     log_ok "k9s (${latest_tag}) -> ${INSTALL_BIN_DIR}/k9s"
@@ -766,28 +857,44 @@ remove_block_from_file() {
         if [[ "$DRY_RUN" == "true" ]]; then
             log_info "[DRY-RUN] $(msg "Would remove previous block from" "Removeria bloco anterior de") $rc_file"
         else
-            local tmp_file="${rc_file}.kubetools.tmp"
-            awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" '
+            local tmp_file
+            tmp_file="$(umask 077 && mktemp)"
+            if awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" '
                 $0 == begin { skip=1; next }
                 $0 == end   { skip=0; next }
                 !skip       { print }
-            ' "$rc_file" > "$tmp_file"
-            mv "$tmp_file" "$rc_file"
+            ' "$rc_file" > "$tmp_file"; then
+                # Write in-place to preserve symlinks (e.g., Stow/Chezmoi dotfiles) and permissions
+                cat "$tmp_file" > "$rc_file"
+            fi
+            rm -f "$tmp_file"
         fi
     fi
 }
 
 build_posix_aliases() {
     local lines=""
-    [[ -n "$ALIAS_KUBECTX" ]]  && lines+="alias ${ALIAS_KUBECTX}='kubectx'"$'\n'
-    [[ -n "$ALIAS_KUBENS" ]]   && lines+="alias ${ALIAS_KUBENS}='kubens'"$'\n'
-    [[ -n "$ALIAS_KUBECTL" ]]  && lines+="alias ${ALIAS_KUBECTL}='kubectl'"$'\n'
-    [[ -n "$ALIAS_KUBETAIL" ]] && lines+="alias ${ALIAS_KUBETAIL}='kubetail'"$'\n'
+    if [[ -n "$ALIAS_KUBECTX" ]] && is_valid_alias_name "$ALIAS_KUBECTX"; then
+        lines+="alias ${ALIAS_KUBECTX}='kubectx'"$'\n'
+    fi
+    if [[ -n "$ALIAS_KUBENS" ]] && is_valid_alias_name "$ALIAS_KUBENS"; then
+        lines+="alias ${ALIAS_KUBENS}='kubens'"$'\n'
+    fi
+    if [[ -n "$ALIAS_KUBECTL" ]] && is_valid_alias_name "$ALIAS_KUBECTL"; then
+        lines+="alias ${ALIAS_KUBECTL}='kubectl'"$'\n'
+    fi
+    if [[ -n "$ALIAS_KUBETAIL" ]] && is_valid_alias_name "$ALIAS_KUBETAIL"; then
+        lines+="alias ${ALIAS_KUBETAIL}='kubetail'"$'\n'
+    fi
     if [[ ${#EXTRA_ALIASES[@]} -gt 0 ]]; then
         for extra in "${EXTRA_ALIASES[@]}"; do
             local k="${extra%%=*}"
             local v="${extra#*=}"
-            lines+="alias ${k}='${v}'"$'\n'
+            if is_valid_alias_name "$k" && is_valid_alias_value "$v"; then
+                local esc_v
+                esc_v="$(escape_single_quotes_posix "$v")"
+                lines+="alias ${k}='${esc_v}'"$'\n'
+            fi
         done
     fi
     printf "%s" "$lines"
@@ -795,15 +902,27 @@ build_posix_aliases() {
 
 build_fish_aliases() {
     local lines=""
-    [[ -n "$ALIAS_KUBECTX" ]]  && lines+="alias ${ALIAS_KUBECTX} 'kubectx'"$'\n'
-    [[ -n "$ALIAS_KUBENS" ]]   && lines+="alias ${ALIAS_KUBENS} 'kubens'"$'\n'
-    [[ -n "$ALIAS_KUBECTL" ]]  && lines+="alias ${ALIAS_KUBECTL} 'kubectl'"$'\n'
-    [[ -n "$ALIAS_KUBETAIL" ]] && lines+="alias ${ALIAS_KUBETAIL} 'kubetail'"$'\n'
+    if [[ -n "$ALIAS_KUBECTX" ]] && is_valid_alias_name "$ALIAS_KUBECTX"; then
+        lines+="alias ${ALIAS_KUBECTX} 'kubectx'"$'\n'
+    fi
+    if [[ -n "$ALIAS_KUBENS" ]] && is_valid_alias_name "$ALIAS_KUBENS"; then
+        lines+="alias ${ALIAS_KUBENS} 'kubens'"$'\n'
+    fi
+    if [[ -n "$ALIAS_KUBECTL" ]] && is_valid_alias_name "$ALIAS_KUBECTL"; then
+        lines+="alias ${ALIAS_KUBECTL} 'kubectl'"$'\n'
+    fi
+    if [[ -n "$ALIAS_KUBETAIL" ]] && is_valid_alias_name "$ALIAS_KUBETAIL"; then
+        lines+="alias ${ALIAS_KUBETAIL} 'kubetail'"$'\n'
+    fi
     if [[ ${#EXTRA_ALIASES[@]} -gt 0 ]]; then
         for extra in "${EXTRA_ALIASES[@]}"; do
             local k="${extra%%=*}"
             local v="${extra#*=}"
-            lines+="alias ${k} '${v}'"$'\n'
+            if is_valid_alias_name "$k" && is_valid_alias_value "$v"; then
+                local esc_v
+                esc_v="$(escape_single_quotes_fish "$v")"
+                lines+="alias ${k} '${esc_v}'"$'\n'
+            fi
         done
     fi
     printf "%s" "$lines"
@@ -829,11 +948,9 @@ configure_posix_rc() {
     local alias_lines
     alias_lines="$(build_posix_aliases)"
 
-    local block
-    block="$(cat <<EOF
-${MARKER_BEGIN}
-export PATH="\${HOME}/.local/bin:\${PATH}"
-${alias_lines}if [ -f "${INSTALL_SHARE_DIR}/kube-ps1/kube-ps1.sh" ]; then
+    local footer
+    footer="$(cat <<EOF
+if [ -f "${INSTALL_SHARE_DIR}/kube-ps1/kube-ps1.sh" ]; then
     source "${INSTALL_SHARE_DIR}/kube-ps1/kube-ps1.sh"
     ${prompt_line}
 fi
@@ -845,7 +962,8 @@ EOF
         log_info "[DRY-RUN] $(msg "Would update" "Atualizaria") ${rc_file} (${shell_type})"
     else
         touch "$rc_file"
-        printf "\n%s\n" "$block" >> "$rc_file"
+        printf "\n%s\nexport PATH=\"\${HOME}/.local/bin:\${PATH}\"\n%s%s\n" \
+            "$MARKER_BEGIN" "$alias_lines" "$footer" >> "$rc_file"
         log_ok "$(msg "Configured" "Configurado") ${rc_file} (${shell_type})"
     fi
 }
@@ -857,11 +975,9 @@ configure_fish_rc() {
     local alias_lines
     alias_lines="$(build_fish_aliases)"
 
-    local block
-    block="$(cat <<EOF
-${MARKER_BEGIN}
-fish_add_path -g "\$HOME/.local/bin"
-${alias_lines}function __kube_ps1_status
+    local footer
+    footer="$(cat <<EOF
+function __kube_ps1_status
     if not set -q __KUBE_PS1_DISABLED; and command -sq kubectl
         set -l ctx (kubectl config current-context 2>/dev/null)
         if test -n "\$ctx"
@@ -882,7 +998,8 @@ EOF
     else
         mkdir -p "$(dirname "$fish_rc")"
         touch "$fish_rc"
-        printf "\n%s\n" "$block" >> "$fish_rc"
+        printf "\n%s\nfish_add_path -g \"\$HOME/.local/bin\"\n%s%s\n" \
+            "$MARKER_BEGIN" "$alias_lines" "$footer" >> "$fish_rc"
         log_ok "$(msg "Configured" "Configurado") ${fish_rc} (fish)"
     fi
 }
@@ -904,7 +1021,7 @@ configure_shells() {
 }
 
 # ------------------------------------------------------------------------------
-# 7. Uninstall / Rollback (Strictly Scoped by Manifest State)
+# 7. Uninstall / Rollback (Strictly Scoped & Path-Confined by Manifest State)
 # ------------------------------------------------------------------------------
 uninstall_pkg() {
     local mgr="$1"
@@ -934,22 +1051,34 @@ uninstall_all() {
             local rest="${entry#*:}"
             case "$kind" in
                 file)
-                    if [[ -L "$rest" || -f "$rest" ]]; then
-                        run_cmd rm -f "$rest"
-                        log_ok "$(msg "Removed tracked binary" "Binário rastreado removido"): $rest"
+                    if is_safe_managed_path "$rest" "$INSTALL_BIN_DIR"; then
+                        if [[ -L "$rest" || -f "$rest" ]]; then
+                            run_cmd rm -f "$rest"
+                            log_ok "$(msg "Removed tracked binary" "Binário rastreado removido"): $rest"
+                        fi
+                    else
+                        log_warn "$(msg "Skipped unsafe manifest file path" "Caminho de arquivo inseguro no manifesto ignorado"): $rest"
                     fi
                     ;;
                 dir)
-                    if [[ -d "$rest" ]]; then
-                        run_cmd rm -rf "$rest"
-                        log_ok "$(msg "Removed tracked directory" "Diretório rastreado removido"): $rest"
+                    if is_safe_managed_path "$rest" "$INSTALL_SHARE_DIR"; then
+                        if [[ -d "$rest" ]]; then
+                            run_cmd rm -rf "$rest"
+                            log_ok "$(msg "Removed tracked directory" "Diretório rastreado removido"): $rest"
+                        fi
+                    else
+                        log_warn "$(msg "Skipped unsafe manifest directory path" "Caminho de diretório inseguro no manifesto ignorado"): $rest"
                     fi
                     ;;
                 pkg)
                     local mgr="${rest%%:*}"
                     local pkg="${rest#*:}"
-                    log_info "$(msg "Removing package installed by kube-tools" "Removendo pacote instalado pelo kube-tools"): ${pkg} (${mgr})"
-                    uninstall_pkg "$mgr" "$pkg" || log_warn "$(msg "Could not auto-remove package" "Não foi possível remover pacote automaticamente"): $pkg"
+                    if [[ "$mgr" =~ ^(apt|pacman|dnf|yum|zypper|apk|brew)$ ]] && [[ "$pkg" =~ ^(fzf|helm|k9s)$ ]]; then
+                        log_info "$(msg "Removing package installed by kube-tools" "Removendo pacote instalado pelo kube-tools"): ${pkg} (${mgr})"
+                        uninstall_pkg "$mgr" "$pkg" || log_warn "$(msg "Could not auto-remove package" "Não foi possível remover pacote automaticamente"): $pkg"
+                    else
+                        log_warn "$(msg "Skipped untrusted package entry in manifest" "Entrada de pacote não confiável ignorada no manifesto"): $rest"
+                    fi
                     ;;
             esac
         done < "$MANIFEST_FILE"
